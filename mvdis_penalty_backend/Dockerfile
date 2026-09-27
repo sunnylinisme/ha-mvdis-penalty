@@ -7,7 +7,9 @@ LABEL io.hass.version="${BUILD_VERSION}" \
       io.hass.type="app" \
       io.hass.arch="${BUILD_ARCH}" \
       org.opencontainers.image.title="Taiwan MVDIS Penalty" \
-      org.opencontainers.image.description="Automatic MVDIS checks and Home Assistant notifications"
+      org.opencontainers.image.description="Automatic MVDIS checks and Home Assistant notifications" \
+      org.opencontainers.image.source="https://github.com/sunnylinisme/ha-mvdis-penalty" \
+      org.opencontainers.image.licenses="MIT"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

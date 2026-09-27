@@ -23,7 +23,7 @@
 5. 啟動 Add-on，並建議開啟「開機時啟動」與「監控程式」。
 6. 到「日誌」確認出現 `MVDIS query succeeded`。
 
-第一次建立映像檔時需要下載本機 OCR 執行環境，可能會花幾分鐘。安裝完成後不需要重啟 Home Assistant，也不需要另外加入 HACS 自訂儲存庫。
+Add-on 使用 GitHub 預先建置的映像檔；Home Assistant 只需下載完成品，不會在主機上編譯或安裝 OCR 套件。下載時間仍會受到網路速度影響。安裝完成後不需要重啟 Home Assistant，也不需要另外加入 HACS 自訂儲存庫。
 
 ## Home Assistant 實體
 

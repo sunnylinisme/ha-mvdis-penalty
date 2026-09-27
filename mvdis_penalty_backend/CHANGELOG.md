@@ -1,5 +1,10 @@
 # 更新紀錄
 
+## 0.2.3
+
+- 改用 GitHub Container Registry 預先建置映像檔。
+- Home Assistant 安裝與更新時不再於本機安裝 Python 與 OCR 相依套件。
+
 ## 0.2.2
 
 - 將專案首頁、Add-on 說明、設定提示與更新紀錄改為繁體中文。
