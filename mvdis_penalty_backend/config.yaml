@@ -1,7 +1,7 @@
-name: Taiwan MVDIS Penalty
-version: "0.2.1"
+name: 台灣監理站罰單通知
+version: "0.2.2"
 slug: mvdis_penalty_backend
-description: Automatic MVDIS query, local CAPTCHA OCR, entities, and notifications
+description: 自動查詢監理服務網、在本機辨識驗證碼並通知新罰單
 url: https://github.com/sunnylinisme/ha-mvdis-penalty
 arch:
   - amd64

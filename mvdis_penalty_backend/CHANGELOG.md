@@ -1,26 +1,30 @@
-# Changelog
+# 更新紀錄
+
+## 0.2.2
+
+- 將專案首頁、Add-on 說明、設定提示與更新紀錄改為繁體中文。
+- 補上 Synology DS723+ VMM 安裝、更新、通知及常見問題說明。
+- 重新設計 Add-on 圖示，強化車輛、罰單與提醒的辨識度。
 
 ## 0.2.1
 
-- Work around the current TWCA root compatibility issue by disabling only
-  Python's strict X.509 flag for MVDIS connections.
-- Keep certificate-authority, hostname, validity-period, and signature
-  verification enabled; insecure TLS is not used.
+- 避開目前 TWCA 根憑證與 Python 嚴格 X.509 模式的相容性問題。
+- 仍保留憑證授權單位、主機名稱、有效期限及簽章驗證，未使用不安全的 TLS 設定。
 
 ## 0.2.0
 
-- Convert the project to one Home Assistant add-on; HACS is no longer required.
-- Publish five Home Assistant entities directly through the internal Core API.
-- Fire `mvdis_penalty_new_case` and create a persistent notification for new records.
-- Remove the loopback companion API and unnecessary host networking.
+- 將專案整合為單一 Home Assistant Add-on，不再需要 HACS。
+- 透過 Home Assistant 內部 Core API 直接建立五個實體。
+- 發現新紀錄時觸發 `mvdis_penalty_new_case` 並建立永久通知。
+- 移除本機回送 API 與不必要的主機網路權限。
 
 ## 0.1.1
 
-- Add the local integration brand icon required by HACS validation.
-- Add the repository topics required by HACS validation.
+- 加入 HACS 驗證所需的整合品牌圖示。
+- 加入 HACS 驗證所需的儲存庫主題。
 
 ## 0.1.0
 
-- Initial experimental release for Home Assistant OS `amd64`.
-- Local MVDIS CAPTCHA OCR and scheduled query.
-- Loopback-only JSON API for the companion HACS integration.
+- 首次實驗版，支援 Home Assistant OS `amd64`。
+- 加入監理服務網驗證碼本機辨識與排程查詢。
+- 提供舊版 HACS 整合使用的本機 JSON API。
