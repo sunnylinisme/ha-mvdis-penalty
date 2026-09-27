@@ -7,7 +7,7 @@
 
 ## 支援環境
 
-目前版本支援 Home Assistant OS `amd64`，包含在 Synology DS723+ 的 Virtual Machine Manager（VMM）中執行 Home Assistant OS 的環境。
+目前版本支援 Home Assistant OS `amd64`。
 
 ## 安裝方式
 
