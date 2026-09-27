@@ -1,0 +1,46 @@
+{
+  "title": "臺灣監理服務罰單查詢",
+  "config": {
+    "step": {
+      "user": {
+        "title": "連接監理服務查詢後端",
+        "description": "請先安裝並啟動「臺灣監理服務罰單查詢後端」Add-on。此整合只會連接本機回環 API。",
+        "data": {
+          "confirm": "後端 Add-on 已安裝並啟動"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "無法連接 8099 連接埠上的後端 Add-on"
+    },
+    "abort": {
+      "already_configured": "監理服務查詢後端已設定"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "監理服務罰單選項",
+        "data": {
+          "notify": "發現新罰單時建立永久通知"
+        },
+        "data_description": {
+          "notify": "整合也會送出 mvdis_penalty_new_case 事件。"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "unpaid_count": { "name": "未繳罰單" },
+      "total_amount": { "name": "應繳總額" },
+      "last_check": { "name": "最近成功查詢" }
+    },
+    "binary_sensor": {
+      "has_unpaid_penalty": { "name": "有未繳罰單" }
+    },
+    "button": {
+      "refresh": { "name": "立即查詢" }
+    }
+  }
+}

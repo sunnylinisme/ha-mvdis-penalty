@@ -1,0 +1,46 @@
+{
+  "title": "Taiwan MVDIS Penalty",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to the MVDIS backend",
+        "description": "Install and start the Taiwan MVDIS Penalty Backend add-on first. The integration connects only to its loopback API.",
+        "data": {
+          "confirm": "The backend add-on is installed and running"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to the backend add-on on port 8099"
+    },
+    "abort": {
+      "already_configured": "The MVDIS backend is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "MVDIS penalty options",
+        "data": {
+          "notify": "Create a persistent notification for new penalties"
+        },
+        "data_description": {
+          "notify": "The integration also fires the mvdis_penalty_new_case event."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "unpaid_count": { "name": "Unpaid penalties" },
+      "total_amount": { "name": "Total amount" },
+      "last_check": { "name": "Last successful check" }
+    },
+    "binary_sensor": {
+      "has_unpaid_penalty": { "name": "Has unpaid penalty" }
+    },
+    "button": {
+      "refresh": { "name": "Check now" }
+    }
+  }
+}

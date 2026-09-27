@@ -1,0 +1,257 @@
+"""Synchronous MVDIS query and local CAPTCHA OCR."""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+import re
+import threading
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
+
+import requests
+from bs4 import BeautifulSoup
+
+_LOGGER = logging.getLogger(__name__)
+
+BASE_URL = "https://www.mvdis.gov.tw"
+QUERY_URL = f"{BASE_URL}/m3-emv-vil/vil/penaltyQueryPay?method=pagination"
+POST_URL = f"{BASE_URL}/m3-emv-vil/vil/penaltyQueryPay"
+CAPTCHA_URL = f"{BASE_URL}/m3-emv-vil/captchaImg.jpg"
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Home Assistant; Taiwan MVDIS Penalty Backend) "
+        "AppleWebKit/537.36 Safari/537.36"
+    ),
+    "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.5",
+}
+
+CAPTCHA_ERRORS = (
+    "驗證碼錯誤",
+    "驗證碼不正確",
+    "驗證碼輸入錯誤",
+    "驗證碼不符",
+)
+IDENTITY_ERRORS = (
+    "身分證字號錯誤",
+    "身分證字號或居留證格式錯誤",
+    "身分證或居留證格式錯誤",
+    "出生年月日錯誤",
+    "生日格式錯誤",
+    "輸入資料有誤",
+    "查詢條件有誤",
+)
+EMPTY_PATTERNS = (
+    re.compile(r"查無.{0,12}(?:違規|罰鍰|資料)"),
+    re.compile(r"目前.{0,12}(?:無|沒有).{0,12}(?:違規|罰鍰)"),
+    re.compile(r"無.{0,8}(?:交通)?違規紀錄"),
+)
+RESULT_HEADER_PARTS = (
+    "違規日",
+    "違規日期",
+    "違規事實",
+    "違規地點",
+    "告發單",
+    "應到案日",
+    "罰鍰金額",
+    "應繳金額",
+)
+SUMMARY_FIELDS = (
+    "違規日",
+    "違規日期",
+    "違規事實",
+    "違規地點",
+    "應繳金額",
+    "罰鍰金額",
+)
+
+
+class MvdisError(Exception):
+    """Base backend error."""
+
+
+class CaptchaError(MvdisError):
+    """CAPTCHA was rejected or could not be recognized."""
+
+
+class QueryRejectedError(MvdisError):
+    """The supplied identity was rejected."""
+
+
+class ParseError(MvdisError):
+    """The result page no longer matches known markup."""
+
+
+@dataclass(frozen=True, slots=True)
+class Penalty:
+    key: str
+    summary: str
+    amount: int | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"key": self.key, "summary": self.summary, "amount": self.amount}
+
+
+@dataclass(frozen=True, slots=True)
+class QueryResult:
+    penalties: tuple[Penalty, ...]
+    checked_at: datetime
+
+
+class CaptchaSolver:
+    """Thread-safe lazy wrapper around the local OCR model."""
+
+    def __init__(self) -> None:
+        self._ocr = None
+        self._lock = threading.Lock()
+
+    def solve(self, image: bytes) -> str:
+        with self._lock:
+            if self._ocr is None:
+                import ddddocr
+
+                _LOGGER.info("Loading local CAPTCHA model")
+                self._ocr = ddddocr.DdddOcr(show_ad=False)
+            raw = str(self._ocr.classification(image))
+        return re.sub(r"[^A-Z0-9]", "", raw.upper())
+
+
+class MvdisQuery:
+    """Query MVDIS with a new cookie session for every CAPTCHA attempt."""
+
+    def __init__(self) -> None:
+        self._solver = CaptchaSolver()
+
+    def query(self, uid: str, birthday: str, max_retries: int) -> QueryResult:
+        for attempt in range(max_retries):
+            with requests.Session() as session:
+                session.headers.update(HEADERS)
+                page = session.get(QUERY_URL, timeout=30)
+                page.raise_for_status()
+                if "captchaImg.jpg" not in page.text or "queryPerson" not in page.text:
+                    raise ParseError("MVDIS query form was not found")
+
+                captcha = session.get(
+                    CAPTCHA_URL,
+                    params={"attempt": attempt},
+                    headers={"Referer": QUERY_URL},
+                    timeout=30,
+                )
+                captcha.raise_for_status()
+                code = self._solver.solve(captcha.content)
+                if len(code) != 4:
+                    continue
+
+                stage = (
+                    "natural" if re.fullmatch(r"[A-Z][12]\d{8}", uid) else "foreigner"
+                )
+                response = session.post(
+                    POST_URL,
+                    data={
+                        "stage": stage,
+                        "method": "queryPerson",
+                        "uid": uid.upper(),
+                        "birthday": birthday,
+                        "validateStr": code,
+                    },
+                    headers={"Referer": QUERY_URL},
+                    timeout=45,
+                )
+                response.raise_for_status()
+                compact = _compact_text(response.text)
+                if any(message in compact for message in CAPTCHA_ERRORS):
+                    continue
+                if any(message in compact for message in IDENTITY_ERRORS):
+                    raise QueryRejectedError("MVDIS rejected the configured identity")
+                return parse_response(response.text)
+
+        raise CaptchaError(f"CAPTCHA failed after {max_retries} attempts")
+
+
+def parse_response(html: str) -> QueryResult:
+    soup = BeautifulSoup(html, "html.parser")
+    compact = re.sub(r"\s+", "", soup.get_text(" "))
+    if any(pattern.search(compact) for pattern in EMPTY_PATTERNS):
+        return QueryResult((), datetime.now(UTC))
+
+    penalties: dict[str, Penalty] = {}
+    for table in soup.find_all("table"):
+        rows = table.find_all("tr")
+        if len(rows) < 2:
+            continue
+        header_index, headers = _find_headers(rows)
+        if header_index < 0:
+            continue
+        for row in rows[header_index + 1 :]:
+            cells = [_clean(cell.get_text(" ")) for cell in row.find_all("td")]
+            if not cells or len(cells) < max(2, len(headers) // 2):
+                continue
+            fields = {
+                headers[index]: value
+                for index, value in enumerate(cells[: len(headers)])
+                if value
+            }
+            if not fields:
+                continue
+            key = _penalty_key(fields)
+            penalties[key] = Penalty(
+                key=key,
+                summary=_summary(fields),
+                amount=_amount(fields),
+            )
+
+    if penalties:
+        return QueryResult(tuple(penalties.values()), datetime.now(UTC))
+    if any(message in compact for message in CAPTCHA_ERRORS):
+        raise CaptchaError("MVDIS rejected the CAPTCHA")
+    if any(message in compact for message in IDENTITY_ERRORS):
+        raise QueryRejectedError("MVDIS rejected the configured identity")
+    raise ParseError("No recognized result table or empty-result message")
+
+
+def _find_headers(rows: list[Any]) -> tuple[int, list[str]]:
+    for index, row in enumerate(rows[:3]):
+        candidate = [_clean(cell.get_text(" ")) for cell in row.find_all(["th", "td"])]
+        if any(part in "".join(candidate) for part in RESULT_HEADER_PARTS):
+            counts: dict[str, int] = {}
+            result: list[str] = []
+            for cell_index, header in enumerate(candidate):
+                name = header or f"欄位{cell_index + 1}"
+                counts[name] = counts.get(name, 0) + 1
+                result.append(name if counts[name] == 1 else f"{name}_{counts[name]}")
+            return index, result
+    return -1, []
+
+
+def _penalty_key(fields: dict[str, str]) -> str:
+    stable = {
+        key: value
+        for key, value in fields.items()
+        if any(part in key for part in ("單號", "違規日", "車號", "牌照"))
+    }
+    source = stable or fields
+    normalized = "|".join(f"{key}:{value}" for key, value in sorted(source.items()))
+    return hashlib.sha256(normalized.encode()).hexdigest()[:20]
+
+
+def _summary(fields: dict[str, str]) -> str:
+    values = [fields[key] for key in SUMMARY_FIELDS if fields.get(key)]
+    return "｜".join(values) if values else "交通違規罰單"
+
+
+def _amount(fields: dict[str, str]) -> int | None:
+    for key, value in fields.items():
+        if any(part in key for part in ("金額", "罰鍰", "應繳")):
+            digits = re.sub(r"[^0-9]", "", value)
+            if digits:
+                return int(digits)
+    return None
+
+
+def _compact_text(html: str) -> str:
+    return re.sub(r"\s+", "", BeautifulSoup(html, "html.parser").get_text(" "))
+
+
+def _clean(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip(" \u3000:\uff1a")

@@ -1,0 +1,21 @@
+name: Taiwan MVDIS Penalty Backend
+version: "0.1.0"
+slug: mvdis_penalty_backend
+description: Local CAPTCHA OCR and MVDIS query backend for Home Assistant
+url: https://github.com/sunnylinisme/ha-mvdis-penalty
+arch:
+  - amd64
+startup: services
+boot: auto
+init: false
+host_network: true
+options:
+  uid: null
+  birthday: null
+  scan_interval_hours: 24
+  max_retries: 3
+schema:
+  uid: password
+  birthday: password
+  scan_interval_hours: int(6,168)
+  max_retries: int(1,5)

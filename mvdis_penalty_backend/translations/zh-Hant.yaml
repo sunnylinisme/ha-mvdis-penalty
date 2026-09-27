@@ -1,0 +1,13 @@
+configuration:
+  uid:
+    name: 身分證字號
+    description: 僅能設定本人或經授權管理者的臺灣身分證字號。
+  birthday:
+    name: 出生年月日
+    description: 七碼民國年月日，例如民國 78 年 7 月 2 日填 0780702。
+  scan_interval_hours:
+    name: 查詢間隔
+    description: 向監理服務網查詢的間隔小時數，最短六小時。
+  max_retries:
+    name: 驗證碼嘗試次數
+    description: 每次排程最多在本機辨識驗證碼的次數。

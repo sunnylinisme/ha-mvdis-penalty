@@ -1,0 +1,13 @@
+configuration:
+  uid:
+    name: National ID number
+    description: Your own Taiwanese national ID, for example A123456789.
+  birthday:
+    name: ROC birth date
+    description: Seven digits, for example 0780702 for ROC year 78, July 2.
+  scan_interval_hours:
+    name: Query interval
+    description: Hours between government-site queries; minimum 6.
+  max_retries:
+    name: CAPTCHA attempts
+    description: Maximum local OCR attempts for each scheduled query.
