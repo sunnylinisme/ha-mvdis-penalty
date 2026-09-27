@@ -1,8 +1,9 @@
 # Taiwan MVDIS Penalty for Home Assistant
 
-Experimental Home Assistant package for checking a user's own unpaid traffic
-penalties on Taiwan's official MVDIS website and notifying Home Assistant when a
-new record appears.
+One Home Assistant add-on for automatically checking a user's own unpaid
+traffic penalties on Taiwan's official MVDIS website. It performs CAPTCHA OCR
+locally on the Home Assistant host, creates entities, and sends a persistent
+notification when a new record appears. **HACS is not required.**
 
 > [!WARNING]
 > This is an unofficial community project. It is not affiliated with or endorsed
@@ -10,71 +11,45 @@ new record appears.
 > The government website can change without notice and break the query parser.
 > Always verify important information on the official website.
 
-## Why the project has two components
-
-Home Assistant OS runs Core in Alpine Linux. The local OCR runtime required for
-the MVDIS image CAPTCHA is distributed for glibc Linux, not Alpine/musl. A
-single pure HACS integration therefore cannot install the OCR reliably.
-
-This repository provides:
-
-1. **Taiwan MVDIS Penalty Backend add-on** — a Debian-based, `amd64` add-on that
-   performs the government-site query and CAPTCHA OCR locally.
-2. **Taiwan MVDIS Penalty HACS integration** — exposes entities, the manual
-   refresh button, new-record detection, events, and notifications.
-
-The backend listens only on `127.0.0.1:8099`. Identity data and CAPTCHA images
-remain inside the Home Assistant host and are not sent to an external OCR API.
-
 ## Compatibility
 
-The first release targets Home Assistant OS on `amd64`, including a Synology
+The current release targets Home Assistant OS on `amd64`, including a Synology
 DS723+ running Home Assistant OS in Virtual Machine Manager.
 
 ## Installation
 
-Use the same public GitHub repository URL in both stores.
-
-### 1. Install the backend add-on
-
 1. Open **Settings → Add-ons → Add-on Store**.
-2. Open the menu, choose **Repositories**, and add this GitHub repository URL.
-3. Install **Taiwan MVDIS Penalty Backend**.
+2. Open the menu, choose **Repositories**, and add:
+   `https://github.com/sunnylinisme/ha-mvdis-penalty`
+3. Install **Taiwan MVDIS Penalty**.
 4. In the add-on configuration enter:
    - your own national ID;
    - seven-digit ROC birth date, such as `0780702`;
    - query interval (default 24 hours);
    - maximum CAPTCHA attempts (default 3).
 5. Start the add-on and enable **Start on boot**.
-6. Wait for the log to show that the backend is listening on port 8099.
+6. Wait for the log to show a successful query.
 
 The initial image build downloads the local OCR runtime and can take several
-minutes.
+minutes. No HACS custom repository or integration restart is needed.
 
-### 2. Install the HACS integration
+## Home Assistant entities
 
-1. Open **HACS → Integrations**.
-2. Open the menu and choose **Custom repositories**.
-3. Add the same GitHub repository URL and select **Integration**.
-4. Download **Taiwan MVDIS Penalty** and restart Home Assistant.
-5. Open **Settings → Devices & services → Add integration**.
-6. Search for **Taiwan MVDIS Penalty** and confirm that the backend is running.
+- `sensor.mvdis_penalty_unpaid_count`
+- `sensor.mvdis_penalty_total_amount`
+- `binary_sensor.mvdis_penalty_has_unpaid`
+- `sensor.mvdis_penalty_last_check`
+- `sensor.mvdis_penalty_status`
 
 The first successful result establishes a baseline and deliberately does not
-announce historical records as new. Later unseen records trigger a persistent
-notification and a `mvdis_penalty_new_case` event.
+announce historical records as new. Later unseen records create a persistent
+notification and fire the `mvdis_penalty_new_case` event.
 
-## Entities
+## Optional mobile notification
 
-- Unpaid penalty count
-- Detected total amount
-- Last successful check
-- Has unpaid penalty
-- Check now
-
-## Event automation example
-
-Replace `notify.mobile_app_your_phone` with your own notification action.
+The add-on always creates a Home Assistant persistent notification. To forward
+the same event to a phone, replace `notify.mobile_app_your_phone` below with the
+phone's notification action.
 
 ```yaml
 alias: New MVDIS penalty
@@ -97,9 +72,9 @@ mode: queued
   manage.
 - Add-on options are stored in Home Assistant Supervisor storage and are not
   encrypted at rest. Protect administrator and backup access accordingly.
-- The backend does not write the national ID or birth date to logs or state.
+- The add-on does not write the national ID or birth date to logs or entity state.
 - CAPTCHA recognition runs locally using `ddddocr` and `onnxruntime`.
-- The API binds only to loopback and is not exposed to the LAN.
+- No network port is exposed to the LAN.
 - The project never selects a penalty or initiates payment.
 
 ## Query behavior
@@ -107,8 +82,6 @@ mode: queued
 - Default government-site interval: 24 hours.
 - Minimum interval: 6 hours.
 - Default CAPTCHA attempts: 3.
-- Home Assistant polls the local backend every five minutes; this does not query
-  the government website.
 - MVDIS states that violation records are not updated immediately and appear
   only after the issuing authority enters them.
 
@@ -121,10 +94,10 @@ penalty exists and provides no legal, payment, or deadline guarantee.
 ## Development
 
 ```bash
-python -m pip install pytest beautifulsoup4 aiohttp requests ruff
+python -m pip install pytest beautifulsoup4 requests ruff
 pytest
-ruff check custom_components mvdis_penalty_backend/app tests
-python -m compileall custom_components mvdis_penalty_backend/app
+ruff check mvdis_penalty_backend/app tests
+python -m compileall mvdis_penalty_backend/app
 ```
 
 ## License

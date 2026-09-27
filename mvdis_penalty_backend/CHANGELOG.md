@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0
+
+- Convert the project to one Home Assistant add-on; HACS is no longer required.
+- Publish five Home Assistant entities directly through the internal Core API.
+- Fire `mvdis_penalty_new_case` and create a persistent notification for new records.
+- Remove the loopback companion API and unnecessary host networking.
+
 ## 0.1.1
 
 - Add the local integration brand icon required by HACS validation.

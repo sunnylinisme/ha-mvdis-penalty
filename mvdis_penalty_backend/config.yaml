@@ -1,14 +1,14 @@
-name: Taiwan MVDIS Penalty Backend
-version: "0.1.1"
+name: Taiwan MVDIS Penalty
+version: "0.2.0"
 slug: mvdis_penalty_backend
-description: Local CAPTCHA OCR and MVDIS query backend for Home Assistant
+description: Automatic MVDIS query, local CAPTCHA OCR, entities, and notifications
 url: https://github.com/sunnylinisme/ha-mvdis-penalty
 arch:
   - amd64
 startup: services
 boot: auto
 init: false
-host_network: true
+homeassistant_api: true
 options:
   uid: null
   birthday: null

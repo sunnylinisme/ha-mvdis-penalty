@@ -6,8 +6,8 @@ ARG BUILD_ARCH
 LABEL io.hass.version="${BUILD_VERSION}" \
       io.hass.type="app" \
       io.hass.arch="${BUILD_ARCH}" \
-      org.opencontainers.image.title="Taiwan MVDIS Penalty Backend" \
-      org.opencontainers.image.description="Local OCR backend for Home Assistant"
+      org.opencontainers.image.title="Taiwan MVDIS Penalty" \
+      org.opencontainers.image.description="Automatic MVDIS checks and Home Assistant notifications"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
