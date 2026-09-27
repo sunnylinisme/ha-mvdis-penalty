@@ -1,5 +1,5 @@
 name: Taiwan MVDIS Penalty
-version: "0.2.0"
+version: "0.2.1"
 slug: mvdis_penalty_backend
 description: Automatic MVDIS query, local CAPTCHA OCR, entities, and notifications
 url: https://github.com/sunnylinisme/ha-mvdis-penalty

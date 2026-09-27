@@ -5,13 +5,16 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import ssl
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+import certifi
 import requests
 from bs4 import BeautifulSoup
+from requests.adapters import HTTPAdapter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -83,6 +86,32 @@ class ParseError(MvdisError):
     """The result page no longer matches known markup."""
 
 
+def mvdis_ssl_context() -> ssl.SSLContext:
+    """Build a verified TLS context compatible with the current TWCA chain."""
+    context = ssl.create_default_context(cafile=certifi.where())
+    context.verify_flags &= ~ssl.VERIFY_X509_STRICT
+    return context
+
+
+class MvdisTlsAdapter(HTTPAdapter):
+    """Use the MVDIS-only TLS context without disabling verification."""
+
+    def init_poolmanager(
+        self,
+        connections: int,
+        maxsize: int,
+        block: bool = False,
+        **pool_kwargs: Any,
+    ) -> None:
+        pool_kwargs["ssl_context"] = mvdis_ssl_context()
+        super().init_poolmanager(
+            connections,
+            maxsize,
+            block=block,
+            **pool_kwargs,
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class Penalty:
     key: str
@@ -126,6 +155,7 @@ class MvdisQuery:
     def query(self, uid: str, birthday: str, max_retries: int) -> QueryResult:
         for attempt in range(max_retries):
             with requests.Session() as session:
+                session.mount(f"{BASE_URL}/", MvdisTlsAdapter())
                 session.headers.update(HEADERS)
                 page = session.get(QUERY_URL, timeout=30)
                 page.raise_for_status()

@@ -1,6 +1,15 @@
-"""Tests for the MVDIS HTML parser."""
+"""Tests for the MVDIS HTML parser and TLS configuration."""
 
-from mvdis import parse_response
+import ssl
+
+from mvdis import mvdis_ssl_context, parse_response
+
+
+def test_mvdis_tls_keeps_verification_without_strict_mode() -> None:
+    context = mvdis_ssl_context()
+    assert context.verify_mode is ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+    assert not context.verify_flags & ssl.VERIFY_X509_STRICT
 
 
 def test_parse_empty_result() -> None:

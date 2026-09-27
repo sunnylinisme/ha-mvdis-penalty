@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1
+
+- Work around the current TWCA root compatibility issue by disabling only
+  Python's strict X.509 flag for MVDIS connections.
+- Keep certificate-authority, hostname, validity-period, and signature
+  verification enabled; insecure TLS is not used.
+
 ## 0.2.0
 
 - Convert the project to one Home Assistant add-on; HACS is no longer required.
