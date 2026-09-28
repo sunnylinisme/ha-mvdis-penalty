@@ -3,15 +3,18 @@
 import json
 from typing import Any
 
+import requests
 import server
 from ocr import ctc_decode
 from server import (
     Person,
     _notification_message,
+    classify_error,
     new_penalties,
     parse_options,
     total_amount,
 )
+from web import DASHBOARD_HTML, DashboardServer
 
 KEY_SALT = "01" * 32
 
@@ -85,6 +88,12 @@ def test_publish_result_creates_entities_event_and_notification(monkeypatch) -> 
         "sensor.mvdis_penalty_last_check",
         "sensor.mvdis_penalty_status",
     ]
+    count_state = next(
+        payload
+        for url, payload in calls
+        if url.endswith("/states/sensor.mvdis_penalty_unpaid_count")
+    )
+    assert count_state["attributes"]["penalties"] == [record]
 
 
 def test_additional_people_have_stable_separate_entities(monkeypatch) -> None:
@@ -193,5 +202,153 @@ def test_legacy_state_is_migrated_to_primary_profile(monkeypatch, tmp_path) -> N
     monkeypatch.setattr(server, "DATA_DIR", tmp_path)
     monkeypatch.setattr(server, "STATE_PATH", state_path)
     addon = server.Addon()
-    assert addon._state["version"] == 2
+    assert addon._state["version"] == 3
     assert addon._state["people"]["primary"]["penalties"] == [_item("old")]
+
+
+def test_error_categories_are_stable() -> None:
+    assert classify_error(server.CaptchaError("bad")) == "captcha"
+    assert classify_error(server.QueryRejectedError("bad")) == "identity"
+    assert classify_error(server.ParseError("bad")) == "response_format"
+    assert classify_error(requests.Timeout("bad")) == "timeout"
+    assert classify_error(requests.ConnectionError("bad")) == "network"
+    assert classify_error(RuntimeError("bad")) == "unknown"
+
+
+def test_remove_profile_deletes_entities_and_group(monkeypatch) -> None:
+    posts: list[tuple[str, dict[str, Any]]] = []
+    deletes: list[str] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
+    monkeypatch.setattr(
+        server.requests,
+        "post",
+        lambda url, *, json, **kwargs: (posts.append((url, json)) or Response()),
+    )
+    monkeypatch.setattr(
+        server.requests,
+        "delete",
+        lambda url, **kwargs: (deletes.append(url) or Response()),
+    )
+    publisher = server.HomeAssistantPublisher()
+    publisher.remove_profile("abc123")
+
+    assert len(deletes) == 5
+    assert all("mvdis_penalty_abc123" in url for url in deletes)
+    assert posts[-1][0].endswith("/services/group/remove")
+    assert posts[-1][1] == {"object_id": "mvdis_penalty_abc123"}
+
+
+def test_cleared_result_creates_confirmation(monkeypatch) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
+    monkeypatch.setattr(
+        server.requests,
+        "post",
+        lambda url, *, json, **kwargs: (calls.append((url, json)) or Response()),
+    )
+    publisher = server.HomeAssistantPublisher()
+    person = Person("primary", "本人", "A123456789", "0780702", primary=True)
+    publisher.publish_result(
+        person,
+        {
+            "checked_at": "2026-09-28T12:00:00+00:00",
+            "penalties": [],
+            "error": None,
+        },
+        [],
+        baseline=False,
+        cleared=True,
+    )
+
+    urls = [url for url, _ in calls]
+    assert f"{server.HA_API}/events/mvdis_penalty_cleared" in urls
+    notification = next(
+        payload
+        for url, payload in calls
+        if url.endswith("/services/persistent_notification/create")
+    )
+    assert notification["notification_id"] == "mvdis_penalty_cleared"
+
+
+def test_public_status_does_not_expose_identity(monkeypatch, tmp_path) -> None:
+    options_path = tmp_path / "options.json"
+    options_path.write_text(
+        json.dumps(
+            {
+                "primary_name": "本人",
+                "uid": "A123456789",
+                "birthday": "0780702",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(server, "STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(server, "OPTIONS_PATH", options_path)
+    addon = server.Addon()
+
+    status = addon.public_status()
+    serialized = json.dumps(status, ensure_ascii=False)
+    assert status["people"][0]["name"] == "本人"
+    assert "A123456789" not in serialized
+    assert "0780702" not in serialized
+
+
+def test_ingress_dashboard_status_and_actions(monkeypatch) -> None:
+    class FakeAddon:
+        refreshed = False
+        notified = ""
+
+        def public_status(self):
+            return {"version": 1, "refreshing": False, "people": []}
+
+        def trigger_refresh(self):
+            self.refreshed = True
+            return True
+
+        def send_test_notification(self, profile_key):
+            self.notified = profile_key
+            return profile_key == "primary"
+
+    monkeypatch.setenv("MVDIS_ALLOW_LOCAL_WEB", "1")
+    addon = FakeAddon()
+    dashboard = DashboardServer(addon, port=0)
+    dashboard.start()
+    try:
+        base = f"http://127.0.0.1:{dashboard.port}"
+        page = requests.get(base, timeout=2)
+        assert page.status_code == 200
+        assert "監理站罰單通知" in page.text
+        assert "api/status" in DASHBOARD_HTML
+
+        status = requests.get(f"{base}/api/status", timeout=2)
+        assert status.json()["people"] == []
+
+        refresh = requests.post(
+            f"{base}/api/refresh",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+            timeout=2,
+        )
+        assert refresh.status_code == 202
+        assert addon.refreshed is True
+
+        notification = requests.post(
+            f"{base}/api/test-notification",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+            json={"profile_key": "primary"},
+            timeout=2,
+        )
+        assert notification.status_code == 202
+        assert addon.notified == "primary"
+    finally:
+        dashboard.stop()
