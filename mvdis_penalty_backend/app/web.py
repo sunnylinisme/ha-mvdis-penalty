@@ -203,10 +203,16 @@ function el(tag,text,cls){const n=document.createElement(tag);if(text!==undefine
 function metric(label,value){const box=el("div",undefined,"metric");box.append(el("strong",value),el("span",label));return box}
 function render(data){
  const root=document.querySelector("#people");root.replaceChildren();
- document.querySelector("#refresh").disabled=data.refreshing;
- document.querySelector("#notice").textContent=data.configuration_error?"設定錯誤："+data.configuration_error:
+ document.querySelector("#refresh").disabled=data.refreshing||Boolean(data.configuration_error);
+ document.querySelector("#notice").textContent=data.configuration_error?"設定尚未通過驗證":
   (data.refreshing?"正在查詢監理服務網…":"最近更新："+time(data.last_refresh_at)+
    "　下次更新："+time(data.next_refresh_at));
+ if(data.configuration_error){
+  const card=el("article",undefined,"card");
+  card.append(el("h2","請修正查詢人設定"),el("div",data.configuration_error,"error-box"),
+   el("div","請到 Add-on 的「設定」修正後按儲存；系統會在約 5 秒內自動驗證並查詢，不必重新啟動。","empty"));
+  root.append(card);return
+ }
  for(const person of data.people){
   const card=el("article",undefined,"card"),head=el("div",undefined,"card-head"),title=el("div");
   title.append(el("h2",person.name),el("div","最後查詢："+time(person.checked_at),"muted"));
