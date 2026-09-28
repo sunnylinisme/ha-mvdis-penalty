@@ -66,7 +66,7 @@ mode: queued
 
 ### 為什麼舊版安裝或更新很久？
 
-`0.2.x` 的預先建置映像檔包含完整 OCR 套件、數套未使用的模型與 OpenCV，下載量約 209 MiB，因此會比多數功能單純的 Add-on 慢。`0.3.0` 起只保留查詢所需的辨識模型與執行元件，安裝與更新下載量已大幅縮小。實際時間仍取決於網路、GitHub Container Registry 連線及 Home Assistant 主機的儲存速度。
+`0.2.x` 的預先建置映像檔包含完整 OCR 套件、數套未使用的模型與 OpenCV，下載量約 209 MiB，因此會比多數功能單純的 Add-on 慢。`0.3.0` 起只保留查詢所需的辨識模型與執行元件，並移除容器內多餘的虛擬環境與位元碼，安裝與更新下載量已大幅縮小。實際時間仍取決於網路、GitHub Container Registry 連線及 Home Assistant 主機的儲存速度。
 
 ### 日誌顯示 `Missing Subject Key Identifier`
 

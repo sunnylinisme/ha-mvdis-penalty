@@ -24,14 +24,10 @@ LABEL io.hass.version="${BUILD_VERSION}" \
       org.opencontainers.image.licenses="MIT"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    VIRTUAL_ENV=/opt/venv \
-    PATH="/opt/venv/bin:${PATH}"
-
-RUN python -m venv "${VIRTUAL_ENV}"
+    PYTHONUNBUFFERED=1
 
 COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir --requirement /tmp/requirements.txt \
+RUN pip install --no-cache-dir --no-compile --requirement /tmp/requirements.txt \
     && rm /tmp/requirements.txt
 
 COPY app /app

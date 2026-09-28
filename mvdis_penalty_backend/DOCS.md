@@ -60,7 +60,7 @@ mode: queued
 
 ### 安裝或更新需要很久
 
-`0.2.x` 映像檔包含完整 OCR 套件、多套未使用模型與 OpenCV，下載量約 209 MiB。`0.3.0` 起只保留實際查詢需要的模型與執行元件，下載量已大幅縮小。實際時間仍會受到網路、GitHub Container Registry 連線及 Home Assistant 主機儲存速度影響。
+`0.2.x` 映像檔包含完整 OCR 套件、多套未使用模型與 OpenCV，下載量約 209 MiB。`0.3.0` 起只保留實際查詢需要的模型與執行元件，並移除容器內多餘的虛擬環境與位元碼，下載量已大幅縮小。實際時間仍會受到網路、GitHub Container Registry 連線及 Home Assistant 主機儲存速度影響。
 
 ### `Missing Subject Key Identifier`
 
