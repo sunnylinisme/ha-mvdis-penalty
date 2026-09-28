@@ -34,4 +34,6 @@ COPY app /app
 COPY --from=ocr-assets /ocr_assets /app/ocr_assets
 COPY THIRD_PARTY_NOTICES.md /app/THIRD_PARTY_NOTICES.md
 
+EXPOSE 8099
+
 CMD ["python", "/app/server.py"]

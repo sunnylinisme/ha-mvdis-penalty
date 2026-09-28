@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import Any
 
 import requests
-from mvdis import MvdisQuery
+from mvdis import CaptchaError, MvdisQuery, ParseError, QueryRejectedError
+from web import DashboardServer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -155,12 +156,14 @@ class HomeAssistantPublisher:
         added: list[dict[str, Any]],
         *,
         baseline: bool,
+        cleared: bool = False,
     ) -> None:
         penalties = state["penalties"]
         amount = total_amount(penalties)
         common = {
             "checked_at": state["checked_at"],
             "summaries": [item["summary"] for item in penalties[:10]],
+            "penalties": penalties[:10],
             "profile": person.name,
             "profile_key": person.key,
         }
@@ -240,13 +243,43 @@ class HomeAssistantPublisher:
                 },
             )
 
-    def publish_error(self, person: Person, error: str, failed_at: str) -> None:
+        if cleared:
+            event = {
+                "checked_at": state["checked_at"],
+                "profile": person.name,
+                "profile_key": person.key,
+            }
+            self._post("/events/mvdis_penalty_cleared", event)
+            self._post(
+                "/services/persistent_notification/create",
+                {
+                    "notification_id": (
+                        "mvdis_penalty_cleared"
+                        if person.primary
+                        else f"mvdis_penalty_cleared_{person.key}"
+                    ),
+                    "title": f"監理站已無未繳罰單（{person.name}）",
+                    "message": (
+                        "先前的未繳紀錄已不在本次查詢結果中，"
+                        "請回監理服務網確認繳納或案件狀態。"
+                    ),
+                },
+            )
+
+    def publish_error(
+        self,
+        person: Person,
+        error: str,
+        error_type: str,
+        failed_at: str,
+    ) -> None:
         self._set_state(
             f"sensor.{person.entity_stem}_status",
             "error",
             {
                 "friendly_name": f"{person.name}監理站罰單查詢狀態",
                 "error": error[:500],
+                "error_type": error_type,
                 "failed_at": failed_at,
                 "icon": "mdi:alert-network-outline",
                 "profile": person.name,
@@ -254,6 +287,34 @@ class HomeAssistantPublisher:
             },
         )
         self._publish_group(person)
+
+    def publish_test_notification(self, person: Person) -> None:
+        """Send a clearly marked notification without changing penalty state."""
+        self._post(
+            "/services/persistent_notification/create",
+            {
+                "notification_id": f"mvdis_penalty_test_{person.key}",
+                "title": f"監理站罰單通知測試（{person.name}）",
+                "message": "這是一則測試通知，不代表查到罰單。",
+            },
+        )
+
+    def remove_profile(self, profile_key: str) -> None:
+        """Remove entities and the group left by a deleted profile."""
+        stem = (
+            "mvdis_penalty"
+            if profile_key == "primary"
+            else f"mvdis_penalty_{profile_key}"
+        )
+        for entity_id in (
+            f"sensor.{stem}_unpaid_count",
+            f"sensor.{stem}_total_amount",
+            f"binary_sensor.{stem}_has_unpaid",
+            f"sensor.{stem}_last_check",
+            f"sensor.{stem}_status",
+        ):
+            self._delete(f"/states/{entity_id}")
+        self._post("/services/group/remove", {"object_id": stem})
 
     def _publish_group(self, person: Person) -> None:
         """Create one searchable Home Assistant group for every person."""
@@ -305,6 +366,19 @@ class HomeAssistantPublisher:
         except requests.RequestException as err:
             _LOGGER.warning("Home Assistant API update failed for %s: %s", path, err)
 
+    def _delete(self, path: str) -> None:
+        if not self._token:
+            return
+        try:
+            response = requests.delete(
+                f"{HA_API}{path}",
+                headers={"Authorization": f"Bearer {self._token}"},
+                timeout=15,
+            )
+            response.raise_for_status()
+        except requests.RequestException as err:
+            _LOGGER.warning("Home Assistant API delete failed for %s: %s", path, err)
+
 
 class Addon:
     """Own configuration, query state, scheduling, and persistence."""
@@ -313,6 +387,8 @@ class Addon:
         self._query = MvdisQuery()
         self._publisher = HomeAssistantPublisher()
         self._stop = threading.Event()
+        self._refresh_lock = threading.Lock()
+        self._state_lock = threading.RLock()
         self._state = self._load_state()
         if not re.fullmatch(r"[0-9a-f]{64}", str(self._state.get("key_salt", ""))):
             self._state["key_salt"] = secrets.token_hex(32)
@@ -322,6 +398,10 @@ class Addon:
         self._stop.set()
 
     def refresh(self) -> dict[str, Any]:
+        with self._refresh_lock:
+            return self._refresh()
+
+    def _refresh(self) -> dict[str, Any]:
         try:
             options = self._load_options()
         except Exception as err:
@@ -329,6 +409,13 @@ class Addon:
             return dict(self._state)
 
         people_state = self._state.setdefault("people", {})
+        active_keys = {person.key for person in options["people"]}
+        for removed_key in set(people_state) - active_keys:
+            self._publisher.remove_profile(removed_key)
+            with self._state_lock:
+                people_state.pop(removed_key, None)
+                self._save_state(self._state)
+
         for index, person in enumerate(options["people"], start=1):
             previous = people_state.get(person.key, _empty_person_state())
             try:
@@ -342,14 +429,25 @@ class Addon:
                 added = new_penalties(
                     previous.get("penalties", []), penalties, baseline=baseline
                 )
+                cleared = bool(
+                    previous.get("checked_at")
+                    and previous.get("penalties")
+                    and not penalties
+                )
                 state = {
                     "checked_at": result.checked_at.isoformat(),
                     "penalties": penalties,
                     "error": None,
+                    "error_type": None,
                 }
-                people_state[person.key] = state
+                with self._state_lock:
+                    people_state[person.key] = state
                 self._publisher.publish_result(
-                    person, state, added, baseline=baseline
+                    person,
+                    state,
+                    added,
+                    baseline=baseline,
+                    cleared=cleared,
                 )
                 _LOGGER.info(
                     "MVDIS query succeeded for profile %s/%s: %s record(s), %s new",
@@ -360,6 +458,7 @@ class Addon:
                 )
             except Exception as err:  # One profile must not block the others.
                 failed_at = datetime.now(UTC).isoformat()
+                error_type = classify_error(err)
                 _LOGGER.warning(
                     "MVDIS query failed for profile %s/%s: %s",
                     index,
@@ -368,11 +467,70 @@ class Addon:
                 )
                 state = dict(previous)
                 state["error"] = str(err)
+                state["error_type"] = error_type
                 state["failed_at"] = failed_at
-                people_state[person.key] = state
-                self._publisher.publish_error(person, str(err), failed_at)
-            self._save_state(self._state)
-        return dict(self._state)
+                with self._state_lock:
+                    people_state[person.key] = state
+                self._publisher.publish_error(
+                    person,
+                    str(err),
+                    error_type,
+                    failed_at,
+                )
+            with self._state_lock:
+                self._save_state(self._state)
+        return self.public_status()
+
+    def trigger_refresh(self) -> bool:
+        """Start a manual refresh if another refresh is not already running."""
+        if not self._refresh_lock.acquire(blocking=False):
+            return False
+
+        def run_reserved() -> None:
+            try:
+                self._refresh()
+            finally:
+                self._refresh_lock.release()
+
+        threading.Thread(
+            target=run_reserved,
+            name="mvdis-manual-refresh",
+            daemon=True,
+        ).start()
+        return True
+
+    def send_test_notification(self, profile_key: str) -> bool:
+        """Send a test notification for one configured profile."""
+        try:
+            people = self._load_options()["people"]
+        except Exception:
+            return False
+        person = next((item for item in people if item.key == profile_key), None)
+        if person is None:
+            return False
+        self._publisher.publish_test_notification(person)
+        return True
+
+    def public_status(self) -> dict[str, Any]:
+        """Return a snapshot safe to expose in the authenticated ingress UI."""
+        try:
+            people = self._load_options()["people"]
+        except Exception:
+            people = []
+        with self._state_lock:
+            people_state = json.loads(json.dumps(self._state.get("people", {})))
+        return {
+            "version": 1,
+            "refreshing": self._refresh_lock.locked(),
+            "people": [
+                {
+                    "key": person.key,
+                    "name": person.name,
+                    **people_state.get(person.key, _empty_person_state()),
+                }
+                for person in people
+            ],
+        }
 
     def run(self) -> None:
         self.refresh()
@@ -399,19 +557,19 @@ class Addon:
                 value = json.load(file)
             if isinstance(value, dict) and isinstance(value.get("people"), dict):
                 return {
-                    "version": 2,
+                    "version": 3,
                     "key_salt": value.get("key_salt"),
                     "people": value["people"],
                 }
             if isinstance(value, dict) and "penalties" in value:
                 return {
-                    "version": 2,
+                    "version": 3,
                     "key_salt": None,
                     "people": {"primary": value},
                 }
         except (FileNotFoundError, json.JSONDecodeError):
             pass
-        return {"version": 2, "key_salt": None, "people": {}}
+        return {"version": 3, "key_salt": None, "people": {}}
 
     def _save_state(self, value: dict[str, Any]) -> None:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -426,7 +584,25 @@ def _empty_person_state() -> dict[str, Any]:
         "checked_at": None,
         "penalties": [],
         "error": "Waiting for the first query",
+        "error_type": "waiting",
     }
+
+
+def classify_error(error: Exception) -> str:
+    """Return a stable, user-facing error category without exposing identifiers."""
+    if isinstance(error, CaptchaError):
+        return "captcha"
+    if isinstance(error, QueryRejectedError):
+        return "identity"
+    if isinstance(error, ParseError):
+        return "response_format"
+    if isinstance(error, requests.Timeout):
+        return "timeout"
+    if isinstance(error, requests.ConnectionError):
+        return "network"
+    if isinstance(error, requests.HTTPError):
+        return "http"
+    return "unknown"
 
 
 def _notification_message(added: list[dict[str, Any]]) -> str:
@@ -441,10 +617,15 @@ def _notification_message(added: list[dict[str, Any]]) -> str:
 def main() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     addon = Addon()
+    dashboard = DashboardServer(addon, port=8099)
     signal.signal(signal.SIGTERM, lambda *_: addon.stop())
     signal.signal(signal.SIGINT, lambda *_: addon.stop())
     _LOGGER.info("Taiwan MVDIS Penalty add-on started")
-    addon.run()
+    dashboard.start()
+    try:
+        addon.run()
+    finally:
+        dashboard.stop()
     _LOGGER.info("Taiwan MVDIS Penalty add-on stopped")
 
 
