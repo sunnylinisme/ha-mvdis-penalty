@@ -337,6 +337,48 @@ def test_cleared_result_creates_confirmation(monkeypatch) -> None:
     assert notification["notification_id"] == "mvdis_penalty_cleared"
 
 
+def test_restore_profile_recreates_entities_without_notifications(monkeypatch) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
+    monkeypatch.setattr(
+        server.requests,
+        "post",
+        lambda url, *, json, **kwargs: calls.append((url, json)) or Response(),
+    )
+    publisher = server.HomeAssistantPublisher()
+    person = Person("primary", "本人", "A123456789", "0780702", primary=True)
+
+    publisher.restore_profile(
+        person,
+        {
+            "checked_at": "2026-09-28T12:00:00+00:00",
+            "penalties": [_item("cached", 900)],
+            "error": "network unavailable",
+            "error_type": "network",
+            "failed_at": "2026-09-28T12:30:00+00:00",
+        },
+    )
+
+    urls = [url for url, _ in calls]
+    assert f"{server.HA_API}/states/sensor.mvdis_penalty_unpaid_count" in urls
+    assert f"{server.HA_API}/states/sensor.mvdis_penalty_total_amount" in urls
+    assert f"{server.HA_API}/states/binary_sensor.mvdis_penalty_has_unpaid" in urls
+    assert f"{server.HA_API}/states/sensor.mvdis_penalty_last_check" in urls
+    status_calls = [
+        payload
+        for url, payload in calls
+        if url.endswith("/states/sensor.mvdis_penalty_status")
+    ]
+    assert status_calls[-1]["state"] == "error"
+    assert not any("/events/" in url for url in urls)
+    assert not any("persistent_notification/create" in url for url in urls)
+
+
 def test_public_status_does_not_expose_identity(monkeypatch, tmp_path) -> None:
     options_path = tmp_path / "options.json"
     options_path.write_text(
@@ -436,6 +478,21 @@ def test_connectivity_failure_stops_batch_and_starts_cooldown(
     restarted = server.Addon()
     assert restarted.public_status()["cooldown_until"] == status["cooldown_until"]
     assert restarted.trigger_refresh() is False
+    restored: list[str] = []
+    monkeypatch.setattr(
+        restarted._publisher,
+        "restore_profile",
+        lambda person, state: restored.append(person.name),
+    )
+    monkeypatch.setattr(
+        restarted._query,
+        "query",
+        lambda *args: (_ for _ in ()).throw(AssertionError("query during cooldown")),
+    )
+
+    restarted.refresh()
+
+    assert restored == ["本人", "家人"]
 
 
 def test_public_status_explains_invalid_configuration_safely(
