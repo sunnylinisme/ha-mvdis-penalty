@@ -1,6 +1,8 @@
 """Tests for add-on state comparison and Home Assistant publishing."""
 
 import json
+import threading
+import time
 from typing import Any
 
 import requests
@@ -402,8 +404,50 @@ def test_public_status_explains_invalid_configuration_safely(
     serialized = json.dumps(status, ensure_ascii=False)
     assert status["people"] == []
     assert "檢查碼" in status["configuration_error"]
+    assert "本人" in status["configuration_error"]
     assert "A123456788" not in serialized
     assert "0780702" not in serialized
+    assert "約 5 秒內自動驗證並查詢" in DASHBOARD_HTML
+
+
+def test_saved_options_are_automatically_validated_and_queried(
+    monkeypatch, tmp_path
+) -> None:
+    options_path = tmp_path / "options.json"
+    options = {
+        "primary_name": "本人",
+        "uid": "A123456789",
+        "birthday": "0780702",
+        "scan_interval_hours": 24,
+    }
+    options_path.write_text(json.dumps(options), encoding="utf-8")
+    monkeypatch.setattr(server, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(server, "STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(server, "OPTIONS_PATH", options_path)
+    monkeypatch.setattr(server, "OPTIONS_POLL_SECONDS", 0.01)
+    addon = server.Addon()
+    refreshes: list[str] = []
+    monkeypatch.setattr(
+        addon,
+        "refresh",
+        lambda: refreshes.append(options_path.read_text(encoding="utf-8")) or {},
+    )
+
+    worker = threading.Thread(target=addon.run)
+    worker.start()
+    deadline = time.monotonic() + 1
+    while len(refreshes) < 1 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    options["primary_name"] = "修正後"
+    options_path.write_text(json.dumps(options), encoding="utf-8")
+    deadline = time.monotonic() + 1
+    while len(refreshes) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    addon.stop()
+    worker.join(timeout=1)
+
+    assert len(refreshes) >= 2
+    assert json.loads(refreshes[-1])["primary_name"] == "修正後"
 
 
 def test_test_notification_reports_home_assistant_failure(monkeypatch) -> None:
