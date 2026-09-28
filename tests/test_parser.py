@@ -48,6 +48,12 @@ def test_parse_result_table() -> None:
     assert sum(item.amount or 0 for item in data.penalties) == 2100
     assert data.penalties[0].key != data.penalties[1].key
     assert "超速" in data.penalties[0].summary
+    assert data.penalties[0].details == {
+        "違規日期": "115/01/02",
+        "違規事實": "超速",
+        "違規地點": "測試路段",
+        "應繳金額": "新臺幣 1,200 元",
+    }
 
 
 def test_duplicate_tables_are_deduplicated() -> None:
