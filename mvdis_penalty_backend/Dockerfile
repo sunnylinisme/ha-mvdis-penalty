@@ -10,6 +10,16 @@ RUN python -m pip download \
         --dest /tmp/wheel \
     && python /tmp/extract_ocr_assets.py /tmp/wheel/ddddocr-1.6.1-py3-none-any.whl /ocr_assets
 
+FROM python:3.13-slim AS python-deps
+
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install \
+        --no-cache-dir \
+        --no-compile \
+        --prefix /python-deps \
+        --requirement /tmp/requirements.txt \
+    && find /python-deps -exec touch -h -d @0 {} +
+
 FROM python:3.13-slim
 
 ARG BUILD_VERSION
@@ -26,10 +36,7 @@ LABEL io.hass.version="${BUILD_VERSION}" \
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir --no-compile --requirement /tmp/requirements.txt \
-    && rm /tmp/requirements.txt
-
+COPY --from=python-deps /python-deps /usr/local
 COPY --from=ocr-assets /ocr_assets /app/ocr_assets
 COPY app /app
 COPY THIRD_PARTY_NOTICES.md /app/THIRD_PARTY_NOTICES.md
