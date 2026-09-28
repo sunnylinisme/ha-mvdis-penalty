@@ -351,6 +351,34 @@ def test_public_status_does_not_expose_identity(monkeypatch, tmp_path) -> None:
     assert "seen_keys" not in serialized
 
 
+def test_public_status_includes_refresh_schedule(monkeypatch, tmp_path) -> None:
+    options_path = tmp_path / "options.json"
+    options_path.write_text(
+        json.dumps(
+            {
+                "primary_name": "本人",
+                "uid": "A123456789",
+                "birthday": "0780702",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(server, "STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(server, "OPTIONS_PATH", options_path)
+    addon = server.Addon()
+    addon._last_refresh_at = server.datetime(2026, 9, 28, 10, 0, tzinfo=server.UTC)
+    addon._next_refresh_at = server.datetime(2026, 9, 29, 10, 0, tzinfo=server.UTC)
+
+    status = addon.public_status()
+
+    assert status["last_refresh_at"] == "2026-09-28T10:00:00+00:00"
+    assert status["next_refresh_at"] == "2026-09-29T10:00:00+00:00"
+    assert "最近更新：" in DASHBOARD_HTML
+    assert "下次更新：" in DASHBOARD_HTML
+    assert "每頁會自動更新狀態" not in DASHBOARD_HTML
+
+
 def test_public_status_explains_invalid_configuration_safely(
     monkeypatch, tmp_path
 ) -> None:
