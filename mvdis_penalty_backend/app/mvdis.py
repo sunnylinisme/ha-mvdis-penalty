@@ -72,6 +72,15 @@ SUMMARY_FIELDS = (
     "應繳金額",
     "罰鍰金額",
 )
+PENALTY_NUMBER_PARTS = ("單號", "裁決書")
+PENALTY_FALLBACK_IDENTITY_PARTS = (
+    "違規日",
+    "車號",
+    "牌照",
+    "違規事實",
+    "違規地點",
+)
+LEGACY_IDENTITY_PARTS = ("單號", "違規日", "車號", "牌照")
 
 
 class MvdisError(Exception):
@@ -122,14 +131,18 @@ class Penalty:
     summary: str
     amount: int | None
     details: dict[str, str]
+    legacy_key: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        value = {
             "key": self.key,
             "summary": self.summary,
             "amount": self.amount,
             "details": dict(self.details),
         }
+        if self.legacy_key and self.legacy_key != self.key:
+            value["legacy_key"] = self.legacy_key
+        return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,12 +248,13 @@ def parse_response(html: str) -> QueryResult:
             }
             if not fields:
                 continue
-            key = _penalty_key(fields)
+            key = penalty_key(fields)
             penalties[key] = Penalty(
                 key=key,
                 summary=_summary(fields),
                 amount=_amount(fields),
                 details=fields,
+                legacy_key=legacy_penalty_key(fields),
             )
 
     if penalties:
@@ -266,11 +280,29 @@ def _find_headers(rows: list[Any]) -> tuple[int, list[str]]:
     return -1, []
 
 
-def _penalty_key(fields: dict[str, str]) -> str:
+def penalty_key(fields: dict[str, str]) -> str:
+    """Return a stable identity that keeps distinct same-day penalties apart."""
+    official_numbers = {
+        key: value
+        for key, value in fields.items()
+        if any(part in key for part in PENALTY_NUMBER_PARTS)
+    }
+    fallback = {
+        key: value
+        for key, value in fields.items()
+        if any(part in key for part in PENALTY_FALLBACK_IDENTITY_PARTS)
+    }
+    source = official_numbers or fallback or fields
+    normalized = "|".join(f"{key}:{value}" for key, value in sorted(source.items()))
+    return hashlib.sha256(normalized.encode()).hexdigest()[:20]
+
+
+def legacy_penalty_key(fields: dict[str, str]) -> str:
+    """Return the pre-0.6 identity so stored records can migrate safely."""
     stable = {
         key: value
         for key, value in fields.items()
-        if any(part in key for part in ("單號", "違規日", "車號", "牌照"))
+        if any(part in key for part in LEGACY_IDENTITY_PARTS)
     }
     source = stable or fields
     normalized = "|".join(f"{key}:{value}" for key, value in sorted(source.items()))
