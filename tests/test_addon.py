@@ -70,8 +70,21 @@ def test_publish_result_creates_entities_event_and_notification(monkeypatch) -> 
 
     urls = [url for url, _ in calls]
     assert f"{server.HA_API}/states/sensor.mvdis_penalty_unpaid_count" in urls
+    assert f"{server.HA_API}/services/group/set" in urls
     assert f"{server.HA_API}/events/mvdis_penalty_new_case" in urls
     assert f"{server.HA_API}/services/persistent_notification/create" in urls
+    group = next(
+        payload for url, payload in calls if url.endswith("/services/group/set")
+    )
+    assert group["object_id"] == "mvdis_penalty"
+    assert group["name"] == "本人監理站罰單"
+    assert group["entities"] == [
+        "sensor.mvdis_penalty_unpaid_count",
+        "sensor.mvdis_penalty_total_amount",
+        "binary_sensor.mvdis_penalty_has_unpaid",
+        "sensor.mvdis_penalty_last_check",
+        "sensor.mvdis_penalty_status",
+    ]
 
 
 def test_additional_people_have_stable_separate_entities(monkeypatch) -> None:
@@ -99,6 +112,11 @@ def test_additional_people_have_stable_separate_entities(monkeypatch) -> None:
 
     urls = [url for url, _ in calls]
     assert f"{server.HA_API}/states/sensor.mvdis_penalty_abc123_unpaid_count" in urls
+    group = next(
+        payload for url, payload in calls if url.endswith("/services/group/set")
+    )
+    assert group["object_id"] == "mvdis_penalty_abc123"
+    assert group["name"] == "家人監理站罰單"
     event = next(
         payload
         for url, payload in calls

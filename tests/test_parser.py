@@ -2,7 +2,8 @@
 
 import ssl
 
-from mvdis import mvdis_ssl_context, parse_response
+import pytest
+from mvdis import CaptchaError, mvdis_ssl_context, parse_response
 
 
 def test_mvdis_tls_keeps_verification_without_strict_mode() -> None:
@@ -15,6 +16,18 @@ def test_mvdis_tls_keeps_verification_without_strict_mode() -> None:
 def test_parse_empty_result() -> None:
     data = parse_response("<html><body>查無交通違規資料</body></html>")
     assert len(data.penalties) == 0
+
+
+def test_parse_captcha_error_in_javascript() -> None:
+    html = """
+    <html><body>
+      <span id="validateStr1"></span>
+      <script>$('#validateStr1').text('驗證碼輸入錯誤');</script>
+    </body></html>
+    """
+
+    with pytest.raises(CaptchaError, match="rejected the CAPTCHA"):
+        parse_response(html)
 
 
 def test_parse_result_table() -> None:
