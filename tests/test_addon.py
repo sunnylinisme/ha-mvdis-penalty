@@ -7,6 +7,7 @@ from typing import Any
 
 import requests
 import server
+from mvdis import Penalty, QueryResult, legacy_penalty_key, parse_response, penalty_key
 from ocr import choose_candidate, ctc_decode
 from server import (
     _NATIONAL_ID_CODES,
@@ -276,9 +277,109 @@ def test_legacy_state_is_migrated_to_primary_profile(monkeypatch, tmp_path) -> N
     monkeypatch.setattr(server, "DATA_DIR", tmp_path)
     monkeypatch.setattr(server, "STATE_PATH", state_path)
     addon = server.Addon()
-    assert addon._state["version"] == 5
-    assert addon._state["people"]["primary"]["penalties"] == [_item("old")]
+    assert addon._state["version"] == 6
+    assert addon._state["people"]["primary"]["penalties"] == [
+        {**_item("old"), "details": {}}
+    ]
     assert addon._state["people"]["primary"]["seen_keys"] == ["old"]
+
+
+def test_saved_penalty_keys_migrate_without_hiding_same_day_new_case(
+    monkeypatch, tmp_path
+) -> None:
+    old_details = {
+        "違規日期": "115/01/02",
+        "違規事實": "超速",
+        "違規地點": "甲路口",
+        "應繳金額": "1,200",
+    }
+    old_key = legacy_penalty_key(old_details)
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "version": 5,
+                "key_salt": KEY_SALT,
+                "people": {
+                    "primary": {
+                        "checked_at": "2026-09-27T12:00:00+00:00",
+                        "penalties": [
+                            {
+                                "key": old_key,
+                                "summary": "舊紀錄",
+                                "amount": 1200,
+                                "details": old_details,
+                            }
+                        ],
+                        "seen_keys": [old_key],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(server, "STATE_PATH", state_path)
+
+    addon = server.Addon()
+    previous = addon._state["people"]["primary"]
+    migrated = previous["penalties"][0]
+    assert migrated["key"] == penalty_key(old_details)
+    assert migrated["legacy_key"] == old_key
+
+    current = [
+        item.as_dict()
+        for item in parse_response(
+            """
+            <table><tr><th>違規日期</th><th>違規事實</th><th>違規地點</th><th>應繳金額</th></tr>
+            <tr><td>115/01/02</td><td>超速</td><td>甲路口</td><td>1,200</td></tr>
+            <tr><td>115/01/02</td><td>違規停車</td><td>乙路口</td><td>900</td></tr>
+            </table>
+            """
+        ).penalties
+    ]
+    added = new_penalties(
+        previous["penalties"],
+        current,
+        baseline=False,
+        seen_keys=previous["seen_keys"],
+    )
+    assert len(added) == 1
+    assert "違規停車" in added[0]["summary"]
+
+
+def test_valid_but_malformed_cached_penalty_is_sanitized(monkeypatch, tmp_path) -> None:
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "version": 5,
+                "key_salt": KEY_SALT,
+                "people": {
+                    "primary": {
+                        "checked_at": "2026-09-27T12:00:00+00:00",
+                        "penalties": [
+                            {
+                                "key": "old",
+                                "summary": 123,
+                                "amount": "not-a-number",
+                                "details": {"違規日期": "115/01/02"},
+                            }
+                        ],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(server, "STATE_PATH", state_path)
+
+    addon = server.Addon()
+    cached = addon._state["people"]["primary"]["penalties"][0]
+    assert cached["amount"] is None
+    assert cached["summary"] == "123"
+    assert total_amount([cached]) == 0
 
 
 def test_error_categories_are_stable() -> None:
