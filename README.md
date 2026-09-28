@@ -1,6 +1,6 @@
 # 台灣監理站罰單通知（Home Assistant Add-on）
 
-這是一個 Home Assistant Add-on，會定時查詢使用者本人在台灣監理服務網上的未繳交通違規紀錄，在 Home Assistant 主機本機辨識驗證碼，建立感測器，並在出現新紀錄時發出通知。
+這是一個 Home Assistant Add-on，會定時查詢本人或已授權家人在台灣監理服務網上的未繳交通違規紀錄，在 Home Assistant 主機本機辨識驗證碼，建立感測器，並在出現新紀錄時發出通知。最多可設定 5 人。
 
 > [!WARNING]
 > 本專案是非官方的社群作品，與交通部、公路局及監理服務網無關，也未獲其背書。政府網站若改版，查詢功能可能暫時失效。罰單、金額與期限等重要資訊，請務必回到[監理服務網](https://www.mvdis.gov.tw/)確認。
@@ -16,8 +16,10 @@
    `https://github.com/sunnylinisme/ha-mvdis-penalty`
 3. 安裝「台灣監理站罰單通知」。
 4. 在「設定」頁填入：
+   - 主要查詢人的顯示名稱。
    - 本人的身分證字號，例如 `A123456789`。
    - 七碼民國出生年月日，例如民國 78 年 7 月 2 日填 `0780702`。
+   - 如需多人查詢，在「其他查詢人」加入名稱、身分證字號及出生年月日；最多可再加入 4 人。
    - 查詢間隔，預設 24 小時，最短 6 小時。
    - 驗證碼最多重試次數，預設 3 次。
 5. 啟動 Add-on，並建議開啟「開機時啟動」與「監控程式」。
@@ -33,7 +35,9 @@ Add-on 使用 GitHub 預先建置的映像檔；Home Assistant 只需下載完�
 - `sensor.mvdis_penalty_last_check`：最後查詢時間
 - `sensor.mvdis_penalty_status`：最後查詢狀態
 
-第一次成功查詢只會建立基準，不會把原本已存在的紀錄誤報為「新罰單」。之後若發現未見過的紀錄，Add-on 會建立 Home Assistant 永久通知，並觸發 `mvdis_penalty_new_case` 事件。
+以上固定 ID 屬於主要查詢人，升級後既有儀表板與自動化可以繼續使用。其他查詢人會各自建立同樣的 5 個實體，ID 會加入一段以本機隨機金鑰產生、不含身分證字號的識別碼，例如 `sensor.mvdis_penalty_a1b2c3d4e5_unpaid_count`；Home Assistant 介面顯示的名稱會使用你設定的查詢人名稱。
+
+每位查詢人的第一次成功查詢只會建立各自基準，不會把原本已存在的紀錄誤報為「新罰單」。之後若發現未見過的紀錄，Add-on 會建立 Home Assistant 永久通知，並觸發 `mvdis_penalty_new_case` 事件。事件資料中的 `profile` 是發現新紀錄的查詢人名稱。
 
 ## 手機通知（選用）
 
@@ -49,7 +53,7 @@ actions:
     data:
       title: "監理服務發現新罰單"
       message: >-
-        新增 {{ trigger.event.data.count }} 筆：
+        {{ trigger.event.data.profile }}新增 {{ trigger.event.data.count }} 筆：
         {{ trigger.event.data.summaries | join('；') }}
 mode: queued
 ```
@@ -59,6 +63,10 @@ mode: queued
 新版本發布後，進入 Add-on 商店的「台灣監理站罰單通知」頁面按「更新」。若沒有看到更新，可先在附加元件商店選單中按「檢查更新」，或重新載入自訂儲存庫。更新時原本的 Add-on 設定會保留。
 
 ## 常見問題
+
+### 為什麼舊版安裝或更新很久？
+
+`0.2.x` 的預先建置映像檔包含完整 OCR 套件、數套未使用的模型與 OpenCV，下載量約 209 MiB，因此會比多數功能單純的 Add-on 慢。`0.3.0` 起只保留查詢所需的辨識模型與執行元件，安裝與更新下載量已大幅縮小。實際時間仍取決於網路、GitHub Container Registry 連線及 Home Assistant 主機的儲存速度。
 
 ### 日誌顯示 `Missing Subject Key Identifier`
 
@@ -79,9 +87,9 @@ mode: queued
 ## 隱私與安全
 
 - 只能查詢本人，或你已獲合法授權管理的身分資料。
-- 身分證字號及出生年月日儲存在 Home Assistant Supervisor 的 Add-on 設定中，並非靜態加密；請妥善保護管理員帳號與備份。
+- 每位查詢人的身分證字號及出生年月日儲存在 Home Assistant Supervisor 的 Add-on 設定中，並非靜態加密；請妥善保護管理員帳號與備份。
 - Add-on 不會把身分證字號或出生年月日寫入日誌或實體狀態。
-- 驗證碼使用 `ddddocr` 與 `onnxruntime` 在本機辨識。
+- 驗證碼使用精簡自 `ddddocr` 的辨識模型與 `onnxruntime` 在本機處理。
 - 不會對區域網路開放任何連接埠。
 - 本專案不會勾選罰單，也不會啟動繳費程序。
 

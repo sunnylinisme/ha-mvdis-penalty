@@ -1,3 +1,15 @@
+FROM python:3.13-slim AS ocr-assets
+
+COPY ocr-assets-requirements.txt /tmp/ocr-assets-requirements.txt
+COPY tools/extract_ocr_assets.py /tmp/extract_ocr_assets.py
+RUN python -m pip download \
+        --no-deps \
+        --only-binary=:all: \
+        --require-hashes \
+        --requirement /tmp/ocr-assets-requirements.txt \
+        --dest /tmp/wheel \
+    && python /tmp/extract_ocr_assets.py /tmp/wheel/ddddocr-1.6.1-py3-none-any.whl /ocr_assets
+
 FROM python:3.13-slim
 
 ARG BUILD_VERSION
@@ -23,5 +35,7 @@ RUN pip install --no-cache-dir --requirement /tmp/requirements.txt \
     && rm /tmp/requirements.txt
 
 COPY app /app
+COPY --from=ocr-assets /ocr_assets /app/ocr_assets
+COPY THIRD_PARTY_NOTICES.md /app/THIRD_PARTY_NOTICES.md
 
 CMD ["python", "/app/server.py"]

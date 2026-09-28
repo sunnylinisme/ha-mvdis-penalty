@@ -6,7 +6,6 @@ import hashlib
 import logging
 import re
 import ssl
-import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -14,6 +13,7 @@ from typing import Any
 import certifi
 import requests
 from bs4 import BeautifulSoup
+from ocr import LocalOcr
 from requests.adapters import HTTPAdapter
 
 _LOGGER = logging.getLogger(__name__)
@@ -132,17 +132,13 @@ class CaptchaSolver:
     """Thread-safe lazy wrapper around the local OCR model."""
 
     def __init__(self) -> None:
-        self._ocr = None
-        self._lock = threading.Lock()
+        self._ocr: LocalOcr | None = None
 
     def solve(self, image: bytes) -> str:
-        with self._lock:
-            if self._ocr is None:
-                import ddddocr
-
-                _LOGGER.info("Loading local CAPTCHA model")
-                self._ocr = ddddocr.DdddOcr(show_ad=False)
-            raw = str(self._ocr.classification(image))
+        if self._ocr is None:
+            _LOGGER.info("Loading local CAPTCHA model")
+            self._ocr = LocalOcr()
+        raw = str(self._ocr.classification(image))
         return re.sub(r"[^A-Z0-9]", "", raw.upper())
 
 

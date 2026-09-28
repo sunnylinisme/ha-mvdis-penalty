@@ -17,5 +17,5 @@ jobs:
           python-version: "3.13"
       - run: python -m pip install pytest beautifulsoup4 requests pyyaml ruff
       - run: pytest
-      - run: ruff check mvdis_penalty_backend/app tests
-      - run: python -m compileall mvdis_penalty_backend/app
+      - run: ruff check mvdis_penalty_backend/app mvdis_penalty_backend/tools tests
+      - run: python -m compileall mvdis_penalty_backend/app mvdis_penalty_backend/tools

@@ -1,10 +1,26 @@
 configuration:
+  primary_name:
+    name: 主要查詢人名稱
+    description: 顯示在 Home Assistant 實體與通知中的名稱，例如本人。
   uid:
     name: 身分證字號
     description: 僅能設定本人或經授權管理者的臺灣身分證字號。
   birthday:
     name: 出生年月日（民國）
     description: 七碼民國年月日，例如民國 78 年 7 月 2 日填 0780702。
+  additional_people:
+    name: 其他查詢人
+    description: 可加入最多 4 位已授權查詢的人員；每人都會有獨立實體與通知。
+    fields:
+      name:
+        name: 名稱
+        description: 顯示在實體與通知中的辨識名稱。
+      uid:
+        name: 身分證字號
+        description: 此查詢人的臺灣身分證字號。
+      birthday:
+        name: 出生年月日（民國）
+        description: 七碼民國年月日，例如 0780702。
   scan_interval_hours:
     name: 查詢間隔（小時）
     description: 向監理服務網查詢的間隔小時數，最短 6 小時，預設 24 小時。

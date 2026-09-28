@@ -1,10 +1,26 @@
 configuration:
+  primary_name:
+    name: Primary profile name
+    description: Name shown in Home Assistant entities and notifications.
   uid:
     name: National ID number
     description: Your own Taiwanese national ID, for example A123456789.
   birthday:
     name: ROC birth date
     description: Seven digits, for example 0780702 for ROC year 78, July 2.
+  additional_people:
+    name: Additional people
+    description: Add up to four authorized people; each receives separate entities and notifications.
+    fields:
+      name:
+        name: Name
+        description: Display name used in entities and notifications.
+      uid:
+        name: National ID number
+        description: Taiwanese national ID for this profile.
+      birthday:
+        name: ROC birth date
+        description: Seven digits, for example 0780702.
   scan_interval_hours:
     name: Query interval
     description: Hours between government-site queries; minimum 6.

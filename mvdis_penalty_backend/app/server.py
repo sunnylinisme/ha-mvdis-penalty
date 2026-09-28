@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import os
 import re
+import secrets
 import signal
 import threading
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -25,6 +29,96 @@ DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 OPTIONS_PATH = DATA_DIR / "options.json"
 STATE_PATH = DATA_DIR / "state.json"
 HA_API = "http://supervisor/core/api"
+MAX_PEOPLE = 5
+
+
+@dataclass(frozen=True, slots=True)
+class Person:
+    """One authorized MVDIS query profile."""
+
+    key: str
+    name: str
+    uid: str
+    birthday: str
+    primary: bool = False
+
+    @property
+    def entity_stem(self) -> str:
+        return "mvdis_penalty" if self.primary else f"mvdis_penalty_{self.key}"
+
+
+def _person_key(uid: str, key_salt: str) -> str:
+    """Return a stable, installation-specific identifier for HA entity IDs."""
+    return hmac.new(
+        bytes.fromhex(key_salt), uid.encode("ascii"), hashlib.sha256
+    ).hexdigest()[:10]
+
+
+def _validate_person(
+    name: Any,
+    uid: Any,
+    birthday: Any,
+    *,
+    primary: bool,
+    key_salt: str,
+) -> Person:
+    clean_name = str(name or "").strip()
+    clean_uid = str(uid or "").strip().upper()
+    clean_birthday = str(birthday or "").strip()
+    if not clean_name or len(clean_name) > 30:
+        raise ValueError("Profile name must contain 1 to 30 characters")
+    if not re.fullmatch(r"[A-Z][12]\d{8}", clean_uid):
+        raise ValueError("National ID format is invalid")
+    if not re.fullmatch(r"\d{7}", clean_birthday):
+        raise ValueError("ROC birth date must contain seven digits")
+    return Person(
+        key="primary" if primary else _person_key(clean_uid, key_salt),
+        name=clean_name,
+        uid=clean_uid,
+        birthday=clean_birthday,
+        primary=primary,
+    )
+
+
+def parse_options(raw: dict[str, Any], *, key_salt: str) -> dict[str, Any]:
+    """Validate add-on options and expand the primary and additional profiles."""
+    people = [
+        _validate_person(
+            raw.get("primary_name", "主要查詢人"),
+            raw.get("uid"),
+            raw.get("birthday"),
+            primary=True,
+            key_salt=key_salt,
+        )
+    ]
+    additional = raw.get("additional_people", [])
+    if additional is None:
+        additional = []
+    if not isinstance(additional, list):
+        raise ValueError("Additional people must be a list")
+    if len(additional) + 1 > MAX_PEOPLE:
+        raise ValueError(f"At most {MAX_PEOPLE} people can be configured")
+    for value in additional:
+        if not isinstance(value, dict):
+            raise ValueError("Each additional person must be an object")
+        people.append(
+            _validate_person(
+                value.get("name"),
+                value.get("uid"),
+                value.get("birthday"),
+                primary=False,
+                key_salt=key_salt,
+            )
+        )
+    if len({person.uid for person in people}) != len(people):
+        raise ValueError("The same identity cannot be configured more than once")
+    return {
+        "people": people,
+        "scan_interval_hours": max(
+            6, min(168, int(raw.get("scan_interval_hours", 24)))
+        ),
+        "max_retries": max(1, min(5, int(raw.get("max_retries", 3)))),
+    }
 
 
 def new_penalties(
@@ -56,6 +150,7 @@ class HomeAssistantPublisher:
 
     def publish_result(
         self,
+        person: Person,
         state: dict[str, Any],
         added: list[dict[str, Any]],
         *,
@@ -66,53 +161,59 @@ class HomeAssistantPublisher:
         common = {
             "checked_at": state["checked_at"],
             "summaries": [item["summary"] for item in penalties[:10]],
+            "profile": person.name,
+            "profile_key": person.key,
         }
         self._set_state(
-            "sensor.mvdis_penalty_unpaid_count",
+            f"sensor.{person.entity_stem}_unpaid_count",
             len(penalties),
             {
                 **common,
-                "friendly_name": "監理站未繳罰單數",
+                "friendly_name": f"{person.name}監理站未繳罰單數",
                 "icon": "mdi:car-brake-alert",
                 "unit_of_measurement": "張",
             },
         )
         self._set_state(
-            "sensor.mvdis_penalty_total_amount",
+            f"sensor.{person.entity_stem}_total_amount",
             amount,
             {
                 **common,
-                "friendly_name": "監理站罰單金額",
+                "friendly_name": f"{person.name}監理站罰單金額",
                 "icon": "mdi:cash-multiple",
                 "unit_of_measurement": "TWD",
             },
         )
         self._set_state(
-            "binary_sensor.mvdis_penalty_has_unpaid",
+            f"binary_sensor.{person.entity_stem}_has_unpaid",
             "on" if penalties else "off",
             {
                 **common,
-                "friendly_name": "監理站有未繳罰單",
+                "friendly_name": f"{person.name}監理站有未繳罰單",
                 "icon": "mdi:alert-circle",
             },
         )
         self._set_state(
-            "sensor.mvdis_penalty_last_check",
+            f"sensor.{person.entity_stem}_last_check",
             state["checked_at"],
             {
-                "friendly_name": "監理站罰單最後查詢",
+                "friendly_name": f"{person.name}監理站罰單最後查詢",
                 "device_class": "timestamp",
                 "icon": "mdi:clock-check-outline",
+                "profile": person.name,
+                "profile_key": person.key,
             },
         )
         self._set_state(
-            "sensor.mvdis_penalty_status",
+            f"sensor.{person.entity_stem}_status",
             "ok",
             {
-                "friendly_name": "監理站罰單查詢狀態",
+                "friendly_name": f"{person.name}監理站罰單查詢狀態",
                 "baseline_created": baseline,
                 "new_count": len(added),
                 "icon": "mdi:check-network-outline",
+                "profile": person.name,
+                "profile_key": person.key,
             },
         )
         if added:
@@ -121,26 +222,34 @@ class HomeAssistantPublisher:
                 "summaries": [item["summary"] for item in added],
                 "total_amount": total_amount(added),
                 "checked_at": state["checked_at"],
+                "profile": person.name,
+                "profile_key": person.key,
             }
             self._post("/events/mvdis_penalty_new_case", event)
             self._post(
                 "/services/persistent_notification/create",
                 {
-                    "notification_id": "mvdis_penalty_new_case",
-                    "title": "監理服務發現新罰單",
+                    "notification_id": (
+                        "mvdis_penalty_new_case"
+                        if person.primary
+                        else f"mvdis_penalty_new_case_{person.key}"
+                    ),
+                    "title": f"監理服務發現新罰單（{person.name}）",
                     "message": _notification_message(added),
                 },
             )
 
-    def publish_error(self, error: str, failed_at: str) -> None:
+    def publish_error(self, person: Person, error: str, failed_at: str) -> None:
         self._set_state(
-            "sensor.mvdis_penalty_status",
+            f"sensor.{person.entity_stem}_status",
             "error",
             {
-                "friendly_name": "監理站罰單查詢狀態",
+                "friendly_name": f"{person.name}監理站罰單查詢狀態",
                 "error": error[:500],
                 "failed_at": failed_at,
                 "icon": "mdi:alert-network-outline",
+                "profile": person.name,
+                "profile_key": person.key,
             },
         )
 
@@ -184,6 +293,9 @@ class Addon:
         self._publisher = HomeAssistantPublisher()
         self._stop = threading.Event()
         self._state = self._load_state()
+        if not re.fullmatch(r"[0-9a-f]{64}", str(self._state.get("key_salt", ""))):
+            self._state["key_salt"] = secrets.token_hex(32)
+            self._save_state(self._state)
 
     def stop(self) -> None:
         self._stop.set()
@@ -191,40 +303,55 @@ class Addon:
     def refresh(self) -> dict[str, Any]:
         try:
             options = self._load_options()
-            result = self._query.query(
-                options["uid"],
-                options["birthday"],
-                options["max_retries"],
-            )
-            penalties = [item.as_dict() for item in result.penalties]
-            baseline = not bool(self._state.get("checked_at"))
-            added = new_penalties(
-                self._state.get("penalties", []), penalties, baseline=baseline
-            )
-            state = {
-                "checked_at": result.checked_at.isoformat(),
-                "penalties": penalties,
-                "error": None,
-            }
-            self._state = state
-            self._save_state(state)
-            self._publisher.publish_result(state, added, baseline=baseline)
-            _LOGGER.info(
-                "MVDIS query succeeded: %s record(s), %s new",
-                len(penalties),
-                len(added),
-            )
-            return dict(state)
-        except Exception as err:  # Query errors must not terminate the add-on.
-            failed_at = datetime.now(UTC).isoformat()
-            _LOGGER.warning("MVDIS query failed: %s", err)
-            state = dict(self._state)
-            state["error"] = str(err)
-            state["failed_at"] = failed_at
-            self._state = state
-            self._save_state(state)
-            self._publisher.publish_error(str(err), failed_at)
-            return dict(state)
+        except Exception as err:
+            _LOGGER.error("Invalid add-on options: %s", err)
+            return dict(self._state)
+
+        people_state = self._state.setdefault("people", {})
+        for index, person in enumerate(options["people"], start=1):
+            previous = people_state.get(person.key, _empty_person_state())
+            try:
+                result = self._query.query(
+                    person.uid,
+                    person.birthday,
+                    options["max_retries"],
+                )
+                penalties = [item.as_dict() for item in result.penalties]
+                baseline = not bool(previous.get("checked_at"))
+                added = new_penalties(
+                    previous.get("penalties", []), penalties, baseline=baseline
+                )
+                state = {
+                    "checked_at": result.checked_at.isoformat(),
+                    "penalties": penalties,
+                    "error": None,
+                }
+                people_state[person.key] = state
+                self._publisher.publish_result(
+                    person, state, added, baseline=baseline
+                )
+                _LOGGER.info(
+                    "MVDIS query succeeded for profile %s/%s: %s record(s), %s new",
+                    index,
+                    len(options["people"]),
+                    len(penalties),
+                    len(added),
+                )
+            except Exception as err:  # One profile must not block the others.
+                failed_at = datetime.now(UTC).isoformat()
+                _LOGGER.warning(
+                    "MVDIS query failed for profile %s/%s: %s",
+                    index,
+                    len(options["people"]),
+                    err,
+                )
+                state = dict(previous)
+                state["error"] = str(err)
+                state["failed_at"] = failed_at
+                people_state[person.key] = state
+                self._publisher.publish_error(person, str(err), failed_at)
+            self._save_state(self._state)
+        return dict(self._state)
 
     def run(self) -> None:
         self.refresh()
@@ -241,34 +368,29 @@ class Addon:
     def _load_options(self) -> dict[str, Any]:
         with OPTIONS_PATH.open(encoding="utf-8") as file:
             raw = json.load(file)
-        uid = str(raw.get("uid", "")).strip().upper()
-        birthday = str(raw.get("birthday", "")).strip()
-        if not re.fullmatch(r"[A-Z][12]\d{8}", uid):
-            raise ValueError("National ID format is invalid")
-        if not re.fullmatch(r"\d{7}", birthday):
-            raise ValueError("ROC birth date must contain seven digits")
-        return {
-            "uid": uid,
-            "birthday": birthday,
-            "scan_interval_hours": max(
-                6, min(168, int(raw.get("scan_interval_hours", 24)))
-            ),
-            "max_retries": max(1, min(5, int(raw.get("max_retries", 3)))),
-        }
+        if not isinstance(raw, dict):
+            raise ValueError("Add-on options must be an object")
+        return parse_options(raw, key_salt=self._state["key_salt"])
 
     def _load_state(self) -> dict[str, Any]:
         try:
             with STATE_PATH.open(encoding="utf-8") as file:
                 value = json.load(file)
-            if isinstance(value, dict):
-                return value
+            if isinstance(value, dict) and isinstance(value.get("people"), dict):
+                return {
+                    "version": 2,
+                    "key_salt": value.get("key_salt"),
+                    "people": value["people"],
+                }
+            if isinstance(value, dict) and "penalties" in value:
+                return {
+                    "version": 2,
+                    "key_salt": None,
+                    "people": {"primary": value},
+                }
         except (FileNotFoundError, json.JSONDecodeError):
             pass
-        return {
-            "checked_at": None,
-            "penalties": [],
-            "error": "Waiting for the first query",
-        }
+        return {"version": 2, "key_salt": None, "people": {}}
 
     def _save_state(self, value: dict[str, Any]) -> None:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -276,6 +398,14 @@ class Addon:
         with temporary.open("w", encoding="utf-8") as file:
             json.dump(value, file, ensure_ascii=False)
         os.replace(temporary, STATE_PATH)
+
+
+def _empty_person_state() -> dict[str, Any]:
+    return {
+        "checked_at": None,
+        "penalties": [],
+        "error": "Waiting for the first query",
+    }
 
 
 def _notification_message(added: list[dict[str, Any]]) -> str:
