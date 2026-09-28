@@ -46,7 +46,7 @@ def main() -> None:
         encoding="utf-8",
     )
     # Docker layer digests include mtimes. Normalizing the extracted assets keeps
-    # the 42 MiB OCR model layer reusable across otherwise unrelated releases.
+    # the OCR model layer reusable across otherwise unrelated releases.
     for path in (model_path, charset_path, destination):
         os.utime(path, (0, 0))
 

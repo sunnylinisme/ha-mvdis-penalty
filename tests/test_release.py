@@ -64,3 +64,14 @@ def test_ocr_assets_have_reproducible_timestamps(monkeypatch, tmp_path) -> None:
     assert (destination / "common_old.onnx").stat().st_mtime == 0
     assert (destination / "charset.json").stat().st_mtime == 0
     assert destination.stat().st_mtime == 0
+
+
+def test_container_uses_reproducible_dependency_layers() -> None:
+    dockerfile = (ROOT / "mvdis_penalty_backend" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+    assert "AS python-deps" in dockerfile
+    assert "--prefix /python-deps" in dockerfile
+    assert "find /python-deps -exec touch -h -d @0 {} +" in dockerfile
+    assert "COPY --from=python-deps /python-deps /usr/local" in dockerfile
+    assert dockerfile.index("COPY --from=python-deps") < dockerfile.index("COPY app")
