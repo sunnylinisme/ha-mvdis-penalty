@@ -714,8 +714,11 @@ class Addon:
             next_refresh_at = self._next_refresh_at
             cooldown_until = self._cooldown_deadline()
             cooldown_error_type = self._state.get("cooldown_error_type")
+            next_allowed_query_at = self._manual_query_deadline()
         if cooldown_until and cooldown_until <= datetime.now(UTC):
             cooldown_until = None
+        if next_allowed_query_at and next_allowed_query_at <= datetime.now(UTC):
+            next_allowed_query_at = None
         return {
             "version": 2,
             "refreshing": self._refresh_lock.locked(),
@@ -730,6 +733,9 @@ class Addon:
                 cooldown_until.isoformat() if cooldown_until else None
             ),
             "cooldown_error_type": cooldown_error_type if cooldown_until else None,
+            "next_allowed_query_at": (
+                next_allowed_query_at.isoformat() if next_allowed_query_at else None
+            ),
             "people": [
                 {
                     "key": person.key,
@@ -743,7 +749,7 @@ class Addon:
         }
 
     def run(self) -> None:
-        self.refresh()
+        self.refresh(startup=True)
         options_fingerprint = self._options_fingerprint()
         while not self._stop.is_set():
             try:
@@ -753,18 +759,32 @@ class Addon:
                 interval = 3600
             with self._state_lock:
                 now = datetime.now(UTC)
-                self._next_refresh_at = now + timedelta(seconds=interval)
+                anchor = self._last_refresh_at or now
+                self._next_refresh_at = max(
+                    now,
+                    anchor + timedelta(seconds=interval),
+                )
                 cooldown_until = self._cooldown_deadline()
                 if cooldown_until and now < cooldown_until < self._next_refresh_at:
                     self._next_refresh_at = cooldown_until
                 deadline = self._next_refresh_at
             options_changed = False
+            wake_only = False
             while not self._stop.is_set():
                 remaining = max(0.0, (deadline - datetime.now(UTC)).total_seconds())
                 if remaining == 0:
                     break
                 if self._schedule_wake.wait(min(OPTIONS_POLL_SECONDS, remaining)):
                     self._schedule_wake.clear()
+                    current_fingerprint = self._options_fingerprint()
+                    if current_fingerprint != options_fingerprint:
+                        options_fingerprint = current_fingerprint
+                        options_changed = True
+                        _LOGGER.info(
+                            "Add-on options changed; validating and querying now"
+                        )
+                    else:
+                        wake_only = True
                     break
                 current_fingerprint = self._options_fingerprint()
                 if current_fingerprint != options_fingerprint:
@@ -776,6 +796,8 @@ class Addon:
                 self._next_refresh_at = None
             if self._stop.is_set():
                 return
+            if wake_only:
+                continue
             self.refresh()
             if not options_changed:
                 options_fingerprint = self._options_fingerprint()
@@ -786,6 +808,24 @@ class Addon:
             return hashlib.sha256(OPTIONS_PATH.read_bytes()).digest()
         except OSError:
             return None
+
+    def _state_datetime(self, key: str) -> datetime | None:
+        """Read one persisted timestamp as an aware UTC datetime."""
+        value = self._state.get(key)
+        if not isinstance(value, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+
+    def _manual_query_deadline(self) -> datetime | None:
+        """Return when another user-initiated query is safe to start."""
+        attempted_at = self._state_datetime("last_attempt_at")
+        return attempted_at + MANUAL_QUERY_GUARD if attempted_at else None
 
     def _cooldown_deadline(self) -> datetime | None:
         """Return the persisted connectivity cooldown deadline, if valid."""
