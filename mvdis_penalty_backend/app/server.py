@@ -498,9 +498,9 @@ class Addon:
         self._refresh_lock = threading.Lock()
         self._state_lock = threading.RLock()
         self._schedule_wake = threading.Event()
-        self._last_refresh_at: datetime | None = None
-        self._next_refresh_at: datetime | None = None
         self._state = self._load_state()
+        self._last_refresh_at = self._state_datetime("last_attempt_at")
+        self._next_refresh_at: datetime | None = None
         if not re.fullmatch(r"[0-9a-f]{64}", str(self._state.get("key_salt", ""))):
             self._state["key_salt"] = secrets.token_hex(32)
             self._save_state(self._state)
@@ -509,11 +509,11 @@ class Addon:
         self._stop.set()
         self._schedule_wake.set()
 
-    def refresh(self) -> dict[str, Any]:
+    def refresh(self, *, startup: bool = False) -> dict[str, Any]:
         with self._refresh_lock:
-            return self._refresh()
+            return self._refresh(startup=startup)
 
-    def _refresh(self) -> dict[str, Any]:
+    def _refresh(self, *, startup: bool = False) -> dict[str, Any]:
         try:
             options = self._load_options()
         except Exception as err:
@@ -548,7 +548,34 @@ class Addon:
                 self._state.pop("cooldown_error_type", None)
                 self._save_state(self._state)
 
+        options_fingerprint = self._options_fingerprint()
+        next_allowed = self._manual_query_deadline()
+        stored_fingerprint = self._state.get("options_fingerprint")
+        if (
+            startup
+            and next_allowed
+            and next_allowed > now
+            and options_fingerprint is not None
+            and stored_fingerprint == options_fingerprint.hex()
+        ):
+            _LOGGER.info(
+                "MVDIS startup query skipped; last attempt was recent (until %s)",
+                next_allowed.isoformat(),
+            )
+            return self.public_status()
+
+        attempted_at = datetime.now(UTC)
+        with self._state_lock:
+            self._state["last_attempt_at"] = attempted_at.isoformat()
+            self._state["options_fingerprint"] = (
+                options_fingerprint.hex() if options_fingerprint else None
+            )
+            self._last_refresh_at = attempted_at
+            self._save_state(self._state)
+
         for index, person in enumerate(options["people"], start=1):
+            if index > 1 and self._stop.wait(PROFILE_QUERY_DELAY_SECONDS):
+                break
             previous = people_state.get(person.key, _empty_person_state())
             stop_batch = False
             try:
@@ -581,6 +608,7 @@ class Addon:
                 }
                 with self._state_lock:
                     people_state[person.key] = state
+                    self._save_state(self._state)
                 self._publisher.publish_result(
                     person,
                     state,
@@ -610,6 +638,7 @@ class Addon:
                 state["failed_at"] = failed_at
                 with self._state_lock:
                     people_state[person.key] = state
+                    self._save_state(self._state)
                 self._publisher.publish_error(
                     person,
                     str(err),
@@ -640,6 +669,9 @@ class Addon:
         cooldown_until = self._cooldown_deadline()
         if cooldown_until and cooldown_until > datetime.now(UTC):
             return False
+        next_allowed = self._manual_query_deadline()
+        if next_allowed and next_allowed > datetime.now(UTC):
+            return False
         if not self._refresh_lock.acquire(blocking=False):
             return False
 
@@ -648,6 +680,7 @@ class Addon:
                 self._refresh()
             finally:
                 self._refresh_lock.release()
+                self._schedule_wake.set()
 
         threading.Thread(
             target=run_reserved,
