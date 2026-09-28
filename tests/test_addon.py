@@ -550,6 +550,161 @@ def test_public_status_includes_refresh_schedule(monkeypatch, tmp_path) -> None:
     assert "下次更新：" in DASHBOARD_HTML
     assert "每頁會自動更新狀態" not in DASHBOARD_HTML
     assert "監理服務網目前無法連線" in DASHBOARD_HTML
+    assert "可再次立即查詢：" in DASHBOARD_HTML
+
+
+def test_recent_identical_startup_does_not_query_again(monkeypatch, tmp_path) -> None:
+    options_path = tmp_path / "options.json"
+    options_path.write_text(
+        json.dumps(
+            {
+                "primary_name": "本人",
+                "uid": "A123456789",
+                "birthday": "0780702",
+            }
+        ),
+        encoding="utf-8",
+    )
+    state_path = tmp_path / "state.json"
+    monkeypatch.setattr(server, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(server, "STATE_PATH", state_path)
+    monkeypatch.setattr(server, "OPTIONS_PATH", options_path)
+    addon = server.Addon()
+    addon._state["last_attempt_at"] = server.datetime.now(server.UTC).isoformat()
+    addon._state["options_fingerprint"] = server.hashlib.sha256(
+        options_path.read_bytes()
+    ).hexdigest()
+    addon._save_state(addon._state)
+
+    restarted = server.Addon()
+    attempts: list[str] = []
+    monkeypatch.setattr(
+        restarted._query,
+        "query",
+        lambda *args: attempts.append("query") or None,
+    )
+    monkeypatch.setattr(restarted._publisher, "restore_profile", lambda *args: None)
+
+    status = restarted.refresh(startup=True)
+
+    assert attempts == []
+    assert status["next_allowed_query_at"] is not None
+    assert restarted.trigger_refresh() is False
+
+
+def test_changed_options_bypass_startup_query_guard(monkeypatch, tmp_path) -> None:
+    options_path = tmp_path / "options.json"
+    original = {
+        "primary_name": "本人",
+        "uid": "A123456789",
+        "birthday": "0780702",
+    }
+    options_path.write_text(json.dumps(original), encoding="utf-8")
+    state_path = tmp_path / "state.json"
+    monkeypatch.setattr(server, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(server, "STATE_PATH", state_path)
+    monkeypatch.setattr(server, "OPTIONS_PATH", options_path)
+    addon = server.Addon()
+    addon._state["last_attempt_at"] = server.datetime.now(server.UTC).isoformat()
+    addon._state["options_fingerprint"] = server.hashlib.sha256(
+        options_path.read_bytes()
+    ).hexdigest()
+    addon._save_state(addon._state)
+    original["primary_name"] = "修改後"
+    options_path.write_text(json.dumps(original), encoding="utf-8")
+
+    restarted = server.Addon()
+    attempts: list[str] = []
+    monkeypatch.setattr(restarted._publisher, "restore_profile", lambda *args: None)
+
+    def rejected(*args):
+        attempts.append("query")
+        raise server.QueryRejectedError("rejected")
+
+    monkeypatch.setattr(restarted._query, "query", rejected)
+    restarted.refresh(startup=True)
+
+    assert attempts == ["query"]
+
+
+def test_manual_refresh_sets_guard_and_wakes_scheduler(monkeypatch, tmp_path) -> None:
+    options_path = tmp_path / "options.json"
+    options_path.write_text(
+        json.dumps(
+            {
+                "primary_name": "本人",
+                "uid": "A123456789",
+                "birthday": "0780702",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(server, "STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(server, "OPTIONS_PATH", options_path)
+    addon = server.Addon()
+    monkeypatch.setattr(addon._publisher, "restore_profile", lambda *args: None)
+    monkeypatch.setattr(addon._publisher, "publish_error", lambda *args: None)
+    monkeypatch.setattr(
+        addon._query,
+        "query",
+        lambda *args: (_ for _ in ()).throw(server.CaptchaError("bad")),
+    )
+
+    assert addon.trigger_refresh() is True
+    deadline = time.monotonic() + 1
+    while addon._refresh_lock.locked() and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert addon._schedule_wake.is_set()
+    assert addon.public_status()["next_allowed_query_at"] is not None
+    assert addon.trigger_refresh() is False
+
+
+def test_query_state_is_saved_before_home_assistant_notification(
+    monkeypatch, tmp_path
+) -> None:
+    options_path = tmp_path / "options.json"
+    options_path.write_text(
+        json.dumps(
+            {
+                "primary_name": "本人",
+                "uid": "A123456789",
+                "birthday": "0780702",
+            }
+        ),
+        encoding="utf-8",
+    )
+    state_path = tmp_path / "state.json"
+    monkeypatch.setattr(server, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(server, "STATE_PATH", state_path)
+    monkeypatch.setattr(server, "OPTIONS_PATH", options_path)
+    addon = server.Addon()
+    monkeypatch.setattr(addon._publisher, "restore_profile", lambda *args: None)
+    result = QueryResult(
+        (
+            Penalty(
+                key="new-key",
+                summary="測試罰單",
+                amount=1200,
+                details={"舉發單號": "ABC123"},
+            ),
+        ),
+        server.datetime.now(server.UTC),
+    )
+    monkeypatch.setattr(addon._query, "query", lambda *args: result)
+    saved_before_publish: list[bool] = []
+
+    def publish(*args, **kwargs):
+        stored = json.loads(state_path.read_text(encoding="utf-8"))
+        saved_before_publish.append(
+            stored["people"]["primary"]["penalties"][0]["key"] == "new-key"
+        )
+
+    monkeypatch.setattr(addon._publisher, "publish_result", publish)
+    addon.refresh()
+
+    assert saved_before_publish == [True]
 
 
 def test_connectivity_failure_stops_batch_and_starts_cooldown(
@@ -663,7 +818,10 @@ def test_saved_options_are_automatically_validated_and_queried(
     monkeypatch.setattr(
         addon,
         "refresh",
-        lambda: refreshes.append(options_path.read_text(encoding="utf-8")) or {},
+        lambda **kwargs: refreshes.append(
+            options_path.read_text(encoding="utf-8")
+        )
+        or {},
     )
 
     worker = threading.Thread(target=addon.run)
