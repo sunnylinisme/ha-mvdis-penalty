@@ -205,7 +205,8 @@ function render(data){
  const root=document.querySelector("#people");root.replaceChildren();
  document.querySelector("#refresh").disabled=data.refreshing;
  document.querySelector("#notice").textContent=data.configuration_error?"設定錯誤："+data.configuration_error:
-  (data.refreshing?"正在查詢監理服務網…":"每頁會自動更新狀態");
+  (data.refreshing?"正在查詢監理服務網…":"最近更新："+time(data.last_refresh_at)+
+   "　下次更新："+time(data.next_refresh_at));
  for(const person of data.people){
   const card=el("article",undefined,"card"),head=el("div",undefined,"card-head"),title=el("div");
   title.append(el("h2",person.name),el("div","最後查詢："+time(person.checked_at),"muted"));
