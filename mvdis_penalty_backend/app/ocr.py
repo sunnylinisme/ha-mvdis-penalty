@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
+from collections import Counter
 from collections.abc import Iterable
 from io import BytesIO
 from pathlib import Path
@@ -27,6 +29,33 @@ def ctc_decode(indices: Iterable[int], charset: list[str]) -> str:
     return "".join(result)
 
 
+def choose_candidate(candidates: Iterable[tuple[str, float]]) -> str:
+    """Choose a four-character CAPTCHA by agreement, then model confidence."""
+    normalized = [
+        (re.sub(r"[^A-Z0-9]", "", text.upper()), confidence)
+        for text, confidence in candidates
+    ]
+    valid = [(text, confidence) for text, confidence in normalized if len(text) == 4]
+    pool = valid or normalized
+    if not pool:
+        return ""
+
+    votes = Counter(text for text, _confidence in pool)
+    best_confidence: dict[str, float] = {}
+    first_seen: dict[str, int] = {}
+    for position, (text, confidence) in enumerate(pool):
+        best_confidence[text] = max(best_confidence.get(text, 0.0), confidence)
+        first_seen.setdefault(text, position)
+    return max(
+        votes,
+        key=lambda text: (
+            votes[text],
+            best_confidence[text],
+            -first_seen[text],
+        ),
+    )
+
+
 class LocalOcr:
     """Load only the ddddocr recognition model used by this add-on."""
 
@@ -36,13 +65,13 @@ class LocalOcr:
         self._lock = threading.Lock()
 
     def classification(self, image_bytes: bytes) -> str:
-        """Recognize a CAPTCHA using the same preprocessing and CTC decoding."""
+        """Recognize one CAPTCHA through several local-only image variants."""
         with self._lock:
             if self._session is None:
                 self._load()
 
             import numpy as np
-            from PIL import Image
+            from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
             with Image.open(BytesIO(image_bytes)) as image:
                 target_height = 64
@@ -51,18 +80,46 @@ class LocalOcr:
                     (target_width, target_height), Image.Resampling.LANCZOS
                 )
                 image = image.convert("L")
-                image_array = np.asarray(image, dtype=np.float32) / 255.0
+                variants = (
+                    image,
+                    ImageOps.autocontrast(image, cutoff=1),
+                    ImageEnhance.Contrast(image).enhance(1.35),
+                    ImageOps.autocontrast(image.filter(ImageFilter.SHARPEN), cutoff=1),
+                )
 
-            image_array = image_array[np.newaxis, np.newaxis, :, :]
+            candidates: list[tuple[str, float]] = []
             input_name = self._session.get_inputs()[0].name
-            output = self._session.run(None, {input_name: image_array})[0]
-            if output.ndim == 3 and output.shape[1] == 1:
-                indices = np.argmax(output[:, 0, :], axis=1)
-            elif output.ndim == 3:
-                indices = np.argmax(output[0, :, :], axis=1)
-            else:
-                indices = np.atleast_1d(np.argmax(output, axis=-1))
-            return ctc_decode(indices, self._charset)
+            for variant in variants:
+                image_array = np.asarray(variant, dtype=np.float32) / 255.0
+                image_array = image_array[np.newaxis, np.newaxis, :, :]
+                output = self._session.run(None, {input_name: image_array})[0]
+                candidates.append(self._decode_output(output, np))
+            return choose_candidate(candidates)
+
+    def _decode_output(self, output: Any, np: Any) -> tuple[str, float]:
+        """Decode model logits and estimate confidence for emitted characters."""
+        if output.ndim == 3 and output.shape[1] == 1:
+            logits = output[:, 0, :]
+        elif output.ndim == 3:
+            logits = output[0, :, :]
+        else:
+            logits = np.atleast_2d(output)
+
+        indices = np.argmax(logits, axis=-1)
+        text = ctc_decode(indices, self._charset)
+        shifted = logits - np.max(logits, axis=-1, keepdims=True)
+        probabilities = np.exp(shifted)
+        probabilities /= np.sum(probabilities, axis=-1, keepdims=True)
+
+        emitted: list[float] = []
+        previous: int | None = None
+        for position, value in enumerate(indices):
+            index = int(value)
+            if index != previous and index != 0 and 0 <= index < len(self._charset):
+                emitted.append(float(probabilities[position, index]))
+            previous = index
+        confidence = sum(emitted) / len(emitted) if emitted else 0.0
+        return text, confidence
 
     def _load(self) -> None:
         import onnxruntime
