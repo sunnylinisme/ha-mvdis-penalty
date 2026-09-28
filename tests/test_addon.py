@@ -177,6 +177,15 @@ def test_parse_options_keeps_existing_single_person_configuration() -> None:
     assert options["people"][0].uid == "A123456789"
 
 
+def test_parse_options_defaults_to_one_captcha_attempt() -> None:
+    options = parse_options(
+        {"uid": "a123456789", "birthday": "0780702"},
+        key_salt=KEY_SALT,
+    )
+
+    assert options["max_retries"] == 1
+
+
 def test_parse_options_supports_five_people_and_rejects_duplicates() -> None:
     people = [
         {
@@ -249,7 +258,7 @@ def test_legacy_state_is_migrated_to_primary_profile(monkeypatch, tmp_path) -> N
     monkeypatch.setattr(server, "DATA_DIR", tmp_path)
     monkeypatch.setattr(server, "STATE_PATH", state_path)
     addon = server.Addon()
-    assert addon._state["version"] == 4
+    assert addon._state["version"] == 5
     assert addon._state["people"]["primary"]["penalties"] == [_item("old")]
     assert addon._state["people"]["primary"]["seen_keys"] == ["old"]
 
@@ -379,6 +388,54 @@ def test_public_status_includes_refresh_schedule(monkeypatch, tmp_path) -> None:
     assert "最近更新：" in DASHBOARD_HTML
     assert "下次更新：" in DASHBOARD_HTML
     assert "每頁會自動更新狀態" not in DASHBOARD_HTML
+    assert "監理服務網目前無法連線" in DASHBOARD_HTML
+
+
+def test_connectivity_failure_stops_batch_and_starts_cooldown(
+    monkeypatch, tmp_path
+) -> None:
+    options_path = tmp_path / "options.json"
+    options_path.write_text(
+        json.dumps(
+            {
+                "primary_name": "本人",
+                "uid": _national_id("A"),
+                "birthday": "0780702",
+                "additional_people": [
+                    {
+                        "name": "家人",
+                        "uid": _national_id("B"),
+                        "birthday": "0800101",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(server, "STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(server, "OPTIONS_PATH", options_path)
+    addon = server.Addon()
+    attempts: list[str] = []
+
+    def fail_query(uid, birthday, max_retries):
+        attempts.append(uid)
+        raise requests.ConnectionError("blocked")
+
+    monkeypatch.setattr(addon._query, "query", fail_query)
+    monkeypatch.setattr(addon._publisher, "publish_error", lambda *args: None)
+
+    status = addon.refresh()
+
+    assert len(attempts) == 1
+    assert status["cooldown_until"] is not None
+    assert status["cooldown_error_type"] == "network"
+    assert addon.trigger_refresh() is False
+    assert len(attempts) == 1
+
+    restarted = server.Addon()
+    assert restarted.public_status()["cooldown_until"] == status["cooldown_until"]
+    assert restarted.trigger_refresh() is False
 
 
 def test_public_status_explains_invalid_configuration_safely(

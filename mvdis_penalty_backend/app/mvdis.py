@@ -30,6 +30,9 @@ HEADERS = {
     ),
     "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.5",
 }
+PAGE_TIMEOUT = (8, 20)
+CAPTCHA_TIMEOUT = (8, 20)
+POST_TIMEOUT = (8, 30)
 
 CAPTCHA_ERRORS = (
     "驗證碼錯誤",
@@ -161,21 +164,11 @@ class MvdisQuery:
                 session.mount(
                     f"{BASE_URL}/",
                     MvdisTlsAdapter(
-                        max_retries=Retry(
-                            total=2,
-                            connect=2,
-                            read=2,
-                            status=2,
-                            allowed_methods=frozenset({"GET", "POST"}),
-                            status_forcelist=(429, 500, 502, 503, 504),
-                            backoff_factor=0.5,
-                            respect_retry_after_header=True,
-                            raise_on_status=False,
-                        )
+                        max_retries=Retry(total=0, raise_on_status=False)
                     ),
                 )
                 session.headers.update(HEADERS)
-                page = session.get(QUERY_URL, timeout=30)
+                page = session.get(QUERY_URL, timeout=PAGE_TIMEOUT)
                 page.raise_for_status()
                 if "captchaImg.jpg" not in page.text or "queryPerson" not in page.text:
                     raise ParseError("MVDIS query form was not found")
@@ -184,7 +177,7 @@ class MvdisQuery:
                     CAPTCHA_URL,
                     params={"attempt": attempt},
                     headers={"Referer": QUERY_URL},
-                    timeout=30,
+                    timeout=CAPTCHA_TIMEOUT,
                 )
                 captcha.raise_for_status()
                 code = self._solver.solve(captcha.content)
@@ -204,7 +197,7 @@ class MvdisQuery:
                         "validateStr": code,
                     },
                     headers={"Referer": QUERY_URL},
-                    timeout=45,
+                    timeout=POST_TIMEOUT,
                 )
                 response.raise_for_status()
                 compact = _compact_text(response.text)

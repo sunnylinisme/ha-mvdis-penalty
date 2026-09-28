@@ -33,6 +33,8 @@ HA_API = "http://supervisor/core/api"
 MAX_PEOPLE = 5
 MAX_SEEN_KEYS = 500
 OPTIONS_POLL_SECONDS = 5.0
+OUTAGE_COOLDOWN = timedelta(minutes=30)
+OUTAGE_ERROR_TYPES = frozenset({"timeout", "network", "http"})
 _NATIONAL_ID_CODES = {
     letter: value
     for letter, value in zip(
@@ -152,7 +154,7 @@ def parse_options(raw: dict[str, Any], *, key_salt: str) -> dict[str, Any]:
         "scan_interval_hours": max(
             6, min(168, int(raw.get("scan_interval_hours", 24)))
         ),
-        "max_retries": max(1, min(5, int(raw.get("max_retries", 3)))),
+        "max_retries": max(1, min(5, int(raw.get("max_retries", 1)))),
     }
 
 
@@ -434,6 +436,7 @@ class Addon:
         self._stop = threading.Event()
         self._refresh_lock = threading.Lock()
         self._state_lock = threading.RLock()
+        self._schedule_wake = threading.Event()
         self._last_refresh_at: datetime | None = None
         self._next_refresh_at: datetime | None = None
         self._state = self._load_state()
@@ -443,6 +446,7 @@ class Addon:
 
     def stop(self) -> None:
         self._stop.set()
+        self._schedule_wake.set()
 
     def refresh(self) -> dict[str, Any]:
         with self._refresh_lock:
@@ -463,8 +467,23 @@ class Addon:
                 people_state.pop(removed_key, None)
                 self._save_state(self._state)
 
+        cooldown_until = self._cooldown_deadline()
+        now = datetime.now(UTC)
+        if cooldown_until and cooldown_until > now:
+            _LOGGER.info(
+                "MVDIS query skipped during connectivity cooldown until %s",
+                cooldown_until.isoformat(),
+            )
+            return self.public_status()
+        if cooldown_until:
+            with self._state_lock:
+                self._state.pop("cooldown_until", None)
+                self._state.pop("cooldown_error_type", None)
+                self._save_state(self._state)
+
         for index, person in enumerate(options["people"], start=1):
             previous = people_state.get(person.key, _empty_person_state())
+            stop_batch = False
             try:
                 result = self._query.query(
                     person.uid,
@@ -530,14 +549,30 @@ class Addon:
                     error_type,
                     failed_at,
                 )
+                if error_type in OUTAGE_ERROR_TYPES:
+                    stop_batch = True
+                    cooldown_until = datetime.now(UTC) + OUTAGE_COOLDOWN
+                    with self._state_lock:
+                        self._state["cooldown_until"] = cooldown_until.isoformat()
+                        self._state["cooldown_error_type"] = error_type
+                    self._schedule_wake.set()
+                    _LOGGER.warning(
+                        "Stopping remaining profiles; connectivity cooldown until %s",
+                        cooldown_until.isoformat(),
+                    )
             with self._state_lock:
                 self._save_state(self._state)
+            if stop_batch:
+                break
         with self._state_lock:
             self._last_refresh_at = datetime.now(UTC)
         return self.public_status()
 
     def trigger_refresh(self) -> bool:
         """Start a manual refresh if another refresh is not already running."""
+        cooldown_until = self._cooldown_deadline()
+        if cooldown_until and cooldown_until > datetime.now(UTC):
+            return False
         if not self._refresh_lock.acquire(blocking=False):
             return False
 
@@ -577,6 +612,10 @@ class Addon:
             people_state = json.loads(json.dumps(self._state.get("people", {})))
             last_refresh_at = self._last_refresh_at
             next_refresh_at = self._next_refresh_at
+            cooldown_until = self._cooldown_deadline()
+            cooldown_error_type = self._state.get("cooldown_error_type")
+        if cooldown_until and cooldown_until <= datetime.now(UTC):
+            cooldown_until = None
         return {
             "version": 2,
             "refreshing": self._refresh_lock.locked(),
@@ -587,6 +626,10 @@ class Addon:
                 next_refresh_at.isoformat() if next_refresh_at else None
             ),
             "configuration_error": configuration_error,
+            "cooldown_until": (
+                cooldown_until.isoformat() if cooldown_until else None
+            ),
+            "cooldown_error_type": cooldown_error_type if cooldown_until else None,
             "people": [
                 {
                     "key": person.key,
@@ -609,14 +652,19 @@ class Addon:
                 _LOGGER.error("Invalid add-on options: %s", err)
                 interval = 3600
             with self._state_lock:
-                self._next_refresh_at = datetime.now(UTC) + timedelta(seconds=interval)
+                now = datetime.now(UTC)
+                self._next_refresh_at = now + timedelta(seconds=interval)
+                cooldown_until = self._cooldown_deadline()
+                if cooldown_until and now < cooldown_until < self._next_refresh_at:
+                    self._next_refresh_at = cooldown_until
                 deadline = self._next_refresh_at
             options_changed = False
             while not self._stop.is_set():
                 remaining = max(0.0, (deadline - datetime.now(UTC)).total_seconds())
                 if remaining == 0:
                     break
-                if self._stop.wait(min(OPTIONS_POLL_SECONDS, remaining)):
+                if self._schedule_wake.wait(min(OPTIONS_POLL_SECONDS, remaining)):
+                    self._schedule_wake.clear()
                     break
                 current_fingerprint = self._options_fingerprint()
                 if current_fingerprint != options_fingerprint:
@@ -639,6 +687,20 @@ class Addon:
         except OSError:
             return None
 
+    def _cooldown_deadline(self) -> datetime | None:
+        """Return the persisted connectivity cooldown deadline, if valid."""
+        with self._state_lock:
+            value = self._state.get("cooldown_until")
+        if not isinstance(value, str):
+            return None
+        try:
+            deadline = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        if deadline.tzinfo is None:
+            return deadline.replace(tzinfo=UTC)
+        return deadline.astimezone(UTC)
+
     def _load_options(self) -> dict[str, Any]:
         with OPTIONS_PATH.open(encoding="utf-8") as file:
             raw = json.load(file)
@@ -652,8 +714,10 @@ class Addon:
                 value = json.load(file)
             if isinstance(value, dict) and isinstance(value.get("people"), dict):
                 return {
-                    "version": 4,
+                    "version": 5,
                     "key_salt": value.get("key_salt"),
+                    "cooldown_until": value.get("cooldown_until"),
+                    "cooldown_error_type": value.get("cooldown_error_type"),
                     "people": {
                         str(key): _normalize_person_state(person_state)
                         for key, person_state in value["people"].items()
@@ -662,7 +726,7 @@ class Addon:
                 }
             if isinstance(value, dict) and "penalties" in value:
                 return {
-                    "version": 4,
+                    "version": 5,
                     "key_salt": None,
                     "people": {"primary": _normalize_person_state(value)},
                 }
@@ -678,7 +742,7 @@ class Addon:
                 os.chmod(corrupt, 0o600)
             except OSError as move_err:
                 _LOGGER.warning("Could not preserve invalid state file: %s", move_err)
-        return {"version": 4, "key_salt": None, "people": {}}
+        return {"version": 5, "key_salt": None, "people": {}}
 
     def _save_state(self, value: dict[str, Any]) -> None:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
