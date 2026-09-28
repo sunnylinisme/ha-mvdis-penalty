@@ -19,7 +19,8 @@ def test_addon_metadata_uses_supported_private_defaults() -> None:
     config = yaml.safe_load(
         (ROOT / "mvdis_penalty_backend" / "config.yaml").read_text(encoding="utf-8")
     )
-    assert config["version"] == "0.5.3"
+    assert config["version"] == "0.5.4"
+    assert config["options"]["max_retries"] == 1
     assert config["arch"] == ["amd64", "aarch64"]
     assert config["startup"] == "application"
     assert config["stage"] == "stable"
@@ -40,7 +41,7 @@ def test_state_is_private_and_corruption_is_preserved(monkeypatch, tmp_path) -> 
     addon = server.Addon()
 
     assert (tmp_path / "state.corrupt.json").read_text(encoding="utf-8") == "{broken"
-    assert json.loads(state_path.read_text(encoding="utf-8"))["version"] == 4
+    assert json.loads(state_path.read_text(encoding="utf-8"))["version"] == 5
     assert stat.S_IMODE(state_path.stat().st_mode) == 0o600
     assert stat.S_IMODE((tmp_path / "state.corrupt.json").stat().st_mode) == 0o600
     assert addon._state["people"] == {}
@@ -75,3 +76,11 @@ def test_container_uses_reproducible_dependency_layers() -> None:
     assert "find /python-deps -exec touch -h -d @0 {} +" in dockerfile
     assert "COPY --from=python-deps /python-deps /usr/local" in dockerfile
     assert dockerfile.index("COPY --from=python-deps") < dockerfile.index("COPY app")
+
+
+def test_mvdis_requests_do_not_hide_extra_network_retries() -> None:
+    source = (ROOT / "mvdis_penalty_backend" / "app" / "mvdis.py").read_text(
+        encoding="utf-8"
+    )
+    assert "Retry(total=0" in source
+    assert "PAGE_TIMEOUT = (8, 20)" in source
