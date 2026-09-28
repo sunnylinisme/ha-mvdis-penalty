@@ -66,3 +66,15 @@ def test_duplicate_tables_are_deduplicated() -> None:
     data = parse_response(f"<html><body>{table}{table}</body></html>")
     assert len(data.penalties) == 1
     assert sum(item.amount or 0 for item in data.penalties) == 600
+
+
+def test_due_date_is_not_misread_as_money() -> None:
+    html = """
+      <table>
+        <tr><th>違規日</th><th>違規事實</th><th>應繳日期</th></tr>
+        <tr><td>115/01/02</td><td>測試</td><td>115/02/02</td></tr>
+      </table>
+    """
+    data = parse_response(html)
+    assert len(data.penalties) == 1
+    assert data.penalties[0].amount is None
