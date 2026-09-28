@@ -17,7 +17,13 @@ from pathlib import Path
 from typing import Any
 
 import requests
-from mvdis import CaptchaError, MvdisQuery, ParseError, QueryRejectedError
+from mvdis import (
+    CaptchaError,
+    MvdisQuery,
+    ParseError,
+    QueryRejectedError,
+    penalty_key,
+)
 from web import DashboardServer
 
 logging.basicConfig(
@@ -31,9 +37,11 @@ OPTIONS_PATH = DATA_DIR / "options.json"
 STATE_PATH = DATA_DIR / "state.json"
 HA_API = "http://supervisor/core/api"
 MAX_PEOPLE = 5
-MAX_SEEN_KEYS = 500
+MAX_SEEN_KEYS = 1000
 OPTIONS_POLL_SECONDS = 5.0
 OUTAGE_COOLDOWN = timedelta(minutes=30)
+MANUAL_QUERY_GUARD = timedelta(minutes=5)
+PROFILE_QUERY_DELAY_SECONDS = 2.0
 OUTAGE_ERROR_TYPES = frozenset({"timeout", "network", "http"})
 _NATIONAL_ID_CODES = {
     letter: value
@@ -169,22 +177,49 @@ def new_penalties(
     if baseline:
         return []
     known_keys = {str(key) for key in (seen_keys or []) if isinstance(key, str) and key}
-    known_keys.update(str(item.get("key", "")) for item in previous)
-    return [item for item in current if str(item.get("key", "")) not in known_keys]
+    previous_legacy_keys: set[str] = set()
+    for item in previous:
+        known_keys.add(str(item.get("key", "")))
+        legacy_key = str(item.get("legacy_key", ""))
+        if legacy_key:
+            previous_legacy_keys.add(legacy_key)
+
+    added: list[dict[str, Any]] = []
+    for item in current:
+        key = str(item.get("key", ""))
+        legacy_key = str(item.get("legacy_key", ""))
+        if key in known_keys:
+            continue
+        if (
+            legacy_key
+            and legacy_key in known_keys
+            and legacy_key not in previous_legacy_keys
+        ):
+            continue
+        added.append(item)
+    return added
 
 
 def merge_seen_keys(previous: list[str], current: list[dict[str, Any]]) -> list[str]:
     """Keep a bounded, insertion-ordered history of record identifiers."""
     keys = [key for key in previous if isinstance(key, str) and key]
-    keys.extend(str(item.get("key", "")) for item in current if item.get("key"))
+    for item in current:
+        for field in ("key", "legacy_key"):
+            if item.get(field):
+                keys.append(str(item[field]))
     return list(dict.fromkeys(keys))[-MAX_SEEN_KEYS:]
 
 
 def total_amount(penalties: list[dict[str, Any]]) -> int:
     """Sum known penalty amounts."""
-    return sum(
-        int(item["amount"]) for item in penalties if item.get("amount") is not None
-    )  # noqa: E501
+    total = 0
+    for item in penalties:
+        try:
+            if item.get("amount") is not None:
+                total += int(item["amount"])
+        except (AttributeError, TypeError, ValueError):
+            continue
+    return total
 
 
 class HomeAssistantPublisher:
