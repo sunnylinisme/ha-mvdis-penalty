@@ -854,10 +854,12 @@ class Addon:
                 value = json.load(file)
             if isinstance(value, dict) and isinstance(value.get("people"), dict):
                 return {
-                    "version": 5,
+                    "version": 6,
                     "key_salt": value.get("key_salt"),
                     "cooldown_until": value.get("cooldown_until"),
                     "cooldown_error_type": value.get("cooldown_error_type"),
+                    "last_attempt_at": value.get("last_attempt_at"),
+                    "options_fingerprint": value.get("options_fingerprint"),
                     "people": {
                         str(key): _normalize_person_state(person_state)
                         for key, person_state in value["people"].items()
@@ -866,7 +868,7 @@ class Addon:
                 }
             if isinstance(value, dict) and "penalties" in value:
                 return {
-                    "version": 5,
+                    "version": 6,
                     "key_salt": None,
                     "people": {"primary": _normalize_person_state(value)},
                 }
@@ -882,7 +884,7 @@ class Addon:
                 os.chmod(corrupt, 0o600)
             except OSError as move_err:
                 _LOGGER.warning("Could not preserve invalid state file: %s", move_err)
-        return {"version": 5, "key_salt": None, "people": {}}
+        return {"version": 6, "key_salt": None, "people": {}}
 
     def _save_state(self, value: dict[str, Any]) -> None:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -908,9 +910,39 @@ def _empty_person_state() -> dict[str, Any]:
 def _normalize_person_state(value: dict[str, Any]) -> dict[str, Any]:
     """Migrate one saved profile while retaining previously seen records."""
     state = dict(value)
-    penalties = state.get("penalties")
-    if not isinstance(penalties, list):
-        penalties = []
+    raw_penalties = state.get("penalties")
+    penalties_by_key: dict[str, dict[str, Any]] = {}
+    if isinstance(raw_penalties, list):
+        for raw in raw_penalties:
+            if not isinstance(raw, dict):
+                continue
+            raw_details = raw.get("details")
+            details = (
+                {str(key): str(item) for key, item in raw_details.items()}
+                if isinstance(raw_details, dict)
+                else {}
+            )
+            old_key = str(raw.get("key") or "")
+            new_key = penalty_key(details) if details else old_key
+            if not new_key:
+                continue
+            try:
+                amount = (
+                    int(raw["amount"]) if raw.get("amount") is not None else None
+                )
+            except (TypeError, ValueError):
+                amount = None
+            item = {
+                "key": new_key,
+                "summary": str(raw.get("summary") or "交通違規罰單"),
+                "amount": amount,
+                "details": details,
+            }
+            legacy_key = str(raw.get("legacy_key") or old_key)
+            if legacy_key and legacy_key != new_key:
+                item["legacy_key"] = legacy_key
+            penalties_by_key[new_key] = item
+    penalties = list(penalties_by_key.values())
     state["penalties"] = penalties
     seen = state.get("seen_keys")
     if not isinstance(seen, list):
