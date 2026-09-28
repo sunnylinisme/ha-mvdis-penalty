@@ -186,7 +186,7 @@ class MvdisQuery:
                 )
                 response.raise_for_status()
                 compact = _compact_text(response.text)
-                if any(message in compact for message in CAPTCHA_ERRORS):
+                if _has_captcha_error(response.text, compact):
                     continue
                 if any(message in compact for message in IDENTITY_ERRORS):
                     raise QueryRejectedError("MVDIS rejected the configured identity")
@@ -229,7 +229,7 @@ def parse_response(html: str) -> QueryResult:
 
     if penalties:
         return QueryResult(tuple(penalties.values()), datetime.now(UTC))
-    if any(message in compact for message in CAPTCHA_ERRORS):
+    if _has_captcha_error(html, compact):
         raise CaptchaError("MVDIS rejected the CAPTCHA")
     if any(message in compact for message in IDENTITY_ERRORS):
         raise QueryRejectedError("MVDIS rejected the configured identity")
@@ -277,6 +277,14 @@ def _amount(fields: dict[str, str]) -> int | None:
 
 def _compact_text(html: str) -> str:
     return re.sub(r"\s+", "", BeautifulSoup(html, "html.parser").get_text(" "))
+
+
+def _has_captcha_error(html: str, compact: str) -> bool:
+    """Detect CAPTCHA errors, including messages injected by JavaScript."""
+    return any(
+        message in compact or message in html
+        for message in CAPTCHA_ERRORS
+    )
 
 
 def _clean(value: str) -> str:

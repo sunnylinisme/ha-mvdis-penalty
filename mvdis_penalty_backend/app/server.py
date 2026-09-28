@@ -216,6 +216,7 @@ class HomeAssistantPublisher:
                 "profile_key": person.key,
             },
         )
+        self._publish_group(person)
         if added:
             event = {
                 "count": len(added),
@@ -250,6 +251,26 @@ class HomeAssistantPublisher:
                 "icon": "mdi:alert-network-outline",
                 "profile": person.name,
                 "profile_key": person.key,
+            },
+        )
+        self._publish_group(person)
+
+    def _publish_group(self, person: Person) -> None:
+        """Create one searchable Home Assistant group for every person."""
+        stem = person.entity_stem
+        self._post(
+            "/services/group/set",
+            {
+                "object_id": stem,
+                "name": f"{person.name}監理站罰單",
+                "icon": "mdi:car-brake-alert",
+                "entities": [
+                    f"sensor.{stem}_unpaid_count",
+                    f"sensor.{stem}_total_amount",
+                    f"binary_sensor.{stem}_has_unpaid",
+                    f"sensor.{stem}_last_check",
+                    f"sensor.{stem}_status",
+                ],
             },
         )
 
