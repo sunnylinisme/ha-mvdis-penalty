@@ -17,7 +17,13 @@ from pathlib import Path
 from typing import Any
 
 import requests
-from mvdis import CaptchaError, MvdisQuery, ParseError, QueryRejectedError
+from mvdis import (
+    CaptchaError,
+    MvdisQuery,
+    ParseError,
+    QueryRejectedError,
+    penalty_key,
+)
 from web import DashboardServer
 
 logging.basicConfig(
@@ -31,9 +37,11 @@ OPTIONS_PATH = DATA_DIR / "options.json"
 STATE_PATH = DATA_DIR / "state.json"
 HA_API = "http://supervisor/core/api"
 MAX_PEOPLE = 5
-MAX_SEEN_KEYS = 500
+MAX_SEEN_KEYS = 1000
 OPTIONS_POLL_SECONDS = 5.0
 OUTAGE_COOLDOWN = timedelta(minutes=30)
+MANUAL_QUERY_GUARD = timedelta(minutes=5)
+PROFILE_QUERY_DELAY_SECONDS = 2.0
 OUTAGE_ERROR_TYPES = frozenset({"timeout", "network", "http"})
 _NATIONAL_ID_CODES = {
     letter: value
@@ -169,22 +177,49 @@ def new_penalties(
     if baseline:
         return []
     known_keys = {str(key) for key in (seen_keys or []) if isinstance(key, str) and key}
-    known_keys.update(str(item.get("key", "")) for item in previous)
-    return [item for item in current if str(item.get("key", "")) not in known_keys]
+    previous_legacy_keys: set[str] = set()
+    for item in previous:
+        known_keys.add(str(item.get("key", "")))
+        legacy_key = str(item.get("legacy_key", ""))
+        if legacy_key:
+            previous_legacy_keys.add(legacy_key)
+
+    added: list[dict[str, Any]] = []
+    for item in current:
+        key = str(item.get("key", ""))
+        legacy_key = str(item.get("legacy_key", ""))
+        if key in known_keys:
+            continue
+        if (
+            legacy_key
+            and legacy_key in known_keys
+            and legacy_key not in previous_legacy_keys
+        ):
+            continue
+        added.append(item)
+    return added
 
 
 def merge_seen_keys(previous: list[str], current: list[dict[str, Any]]) -> list[str]:
     """Keep a bounded, insertion-ordered history of record identifiers."""
     keys = [key for key in previous if isinstance(key, str) and key]
-    keys.extend(str(item.get("key", "")) for item in current if item.get("key"))
+    for item in current:
+        for field in ("key", "legacy_key"):
+            if item.get(field):
+                keys.append(str(item[field]))
     return list(dict.fromkeys(keys))[-MAX_SEEN_KEYS:]
 
 
 def total_amount(penalties: list[dict[str, Any]]) -> int:
     """Sum known penalty amounts."""
-    return sum(
-        int(item["amount"]) for item in penalties if item.get("amount") is not None
-    )  # noqa: E501
+    total = 0
+    for item in penalties:
+        try:
+            if item.get("amount") is not None:
+                total += int(item["amount"])
+        except (AttributeError, TypeError, ValueError):
+            continue
+    return total
 
 
 class HomeAssistantPublisher:
@@ -463,9 +498,9 @@ class Addon:
         self._refresh_lock = threading.Lock()
         self._state_lock = threading.RLock()
         self._schedule_wake = threading.Event()
-        self._last_refresh_at: datetime | None = None
-        self._next_refresh_at: datetime | None = None
         self._state = self._load_state()
+        self._last_refresh_at = self._state_datetime("last_attempt_at")
+        self._next_refresh_at: datetime | None = None
         if not re.fullmatch(r"[0-9a-f]{64}", str(self._state.get("key_salt", ""))):
             self._state["key_salt"] = secrets.token_hex(32)
             self._save_state(self._state)
@@ -474,11 +509,11 @@ class Addon:
         self._stop.set()
         self._schedule_wake.set()
 
-    def refresh(self) -> dict[str, Any]:
+    def refresh(self, *, startup: bool = False) -> dict[str, Any]:
         with self._refresh_lock:
-            return self._refresh()
+            return self._refresh(startup=startup)
 
-    def _refresh(self) -> dict[str, Any]:
+    def _refresh(self, *, startup: bool = False) -> dict[str, Any]:
         try:
             options = self._load_options()
         except Exception as err:
@@ -513,7 +548,34 @@ class Addon:
                 self._state.pop("cooldown_error_type", None)
                 self._save_state(self._state)
 
+        options_fingerprint = self._options_fingerprint()
+        next_allowed = self._manual_query_deadline()
+        stored_fingerprint = self._state.get("options_fingerprint")
+        if (
+            startup
+            and next_allowed
+            and next_allowed > now
+            and options_fingerprint is not None
+            and stored_fingerprint == options_fingerprint.hex()
+        ):
+            _LOGGER.info(
+                "MVDIS startup query skipped; last attempt was recent (until %s)",
+                next_allowed.isoformat(),
+            )
+            return self.public_status()
+
+        attempted_at = datetime.now(UTC)
+        with self._state_lock:
+            self._state["last_attempt_at"] = attempted_at.isoformat()
+            self._state["options_fingerprint"] = (
+                options_fingerprint.hex() if options_fingerprint else None
+            )
+            self._last_refresh_at = attempted_at
+            self._save_state(self._state)
+
         for index, person in enumerate(options["people"], start=1):
+            if index > 1 and self._stop.wait(PROFILE_QUERY_DELAY_SECONDS):
+                break
             previous = people_state.get(person.key, _empty_person_state())
             stop_batch = False
             try:
@@ -546,6 +608,7 @@ class Addon:
                 }
                 with self._state_lock:
                     people_state[person.key] = state
+                    self._save_state(self._state)
                 self._publisher.publish_result(
                     person,
                     state,
@@ -575,6 +638,7 @@ class Addon:
                 state["failed_at"] = failed_at
                 with self._state_lock:
                     people_state[person.key] = state
+                    self._save_state(self._state)
                 self._publisher.publish_error(
                     person,
                     str(err),
@@ -605,6 +669,9 @@ class Addon:
         cooldown_until = self._cooldown_deadline()
         if cooldown_until and cooldown_until > datetime.now(UTC):
             return False
+        next_allowed = self._manual_query_deadline()
+        if next_allowed and next_allowed > datetime.now(UTC):
+            return False
         if not self._refresh_lock.acquire(blocking=False):
             return False
 
@@ -613,6 +680,7 @@ class Addon:
                 self._refresh()
             finally:
                 self._refresh_lock.release()
+                self._schedule_wake.set()
 
         threading.Thread(
             target=run_reserved,
@@ -646,8 +714,11 @@ class Addon:
             next_refresh_at = self._next_refresh_at
             cooldown_until = self._cooldown_deadline()
             cooldown_error_type = self._state.get("cooldown_error_type")
+            next_allowed_query_at = self._manual_query_deadline()
         if cooldown_until and cooldown_until <= datetime.now(UTC):
             cooldown_until = None
+        if next_allowed_query_at and next_allowed_query_at <= datetime.now(UTC):
+            next_allowed_query_at = None
         return {
             "version": 2,
             "refreshing": self._refresh_lock.locked(),
@@ -662,6 +733,9 @@ class Addon:
                 cooldown_until.isoformat() if cooldown_until else None
             ),
             "cooldown_error_type": cooldown_error_type if cooldown_until else None,
+            "next_allowed_query_at": (
+                next_allowed_query_at.isoformat() if next_allowed_query_at else None
+            ),
             "people": [
                 {
                     "key": person.key,
@@ -675,7 +749,7 @@ class Addon:
         }
 
     def run(self) -> None:
-        self.refresh()
+        self.refresh(startup=True)
         options_fingerprint = self._options_fingerprint()
         while not self._stop.is_set():
             try:
@@ -685,18 +759,32 @@ class Addon:
                 interval = 3600
             with self._state_lock:
                 now = datetime.now(UTC)
-                self._next_refresh_at = now + timedelta(seconds=interval)
+                anchor = self._last_refresh_at or now
+                self._next_refresh_at = max(
+                    now,
+                    anchor + timedelta(seconds=interval),
+                )
                 cooldown_until = self._cooldown_deadline()
                 if cooldown_until and now < cooldown_until < self._next_refresh_at:
                     self._next_refresh_at = cooldown_until
                 deadline = self._next_refresh_at
             options_changed = False
+            wake_only = False
             while not self._stop.is_set():
                 remaining = max(0.0, (deadline - datetime.now(UTC)).total_seconds())
                 if remaining == 0:
                     break
                 if self._schedule_wake.wait(min(OPTIONS_POLL_SECONDS, remaining)):
                     self._schedule_wake.clear()
+                    current_fingerprint = self._options_fingerprint()
+                    if current_fingerprint != options_fingerprint:
+                        options_fingerprint = current_fingerprint
+                        options_changed = True
+                        _LOGGER.info(
+                            "Add-on options changed; validating and querying now"
+                        )
+                    else:
+                        wake_only = True
                     break
                 current_fingerprint = self._options_fingerprint()
                 if current_fingerprint != options_fingerprint:
@@ -708,6 +796,8 @@ class Addon:
                 self._next_refresh_at = None
             if self._stop.is_set():
                 return
+            if wake_only:
+                continue
             self.refresh()
             if not options_changed:
                 options_fingerprint = self._options_fingerprint()
@@ -718,6 +808,24 @@ class Addon:
             return hashlib.sha256(OPTIONS_PATH.read_bytes()).digest()
         except OSError:
             return None
+
+    def _state_datetime(self, key: str) -> datetime | None:
+        """Read one persisted timestamp as an aware UTC datetime."""
+        value = self._state.get(key)
+        if not isinstance(value, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+
+    def _manual_query_deadline(self) -> datetime | None:
+        """Return when another user-initiated query is safe to start."""
+        attempted_at = self._state_datetime("last_attempt_at")
+        return attempted_at + MANUAL_QUERY_GUARD if attempted_at else None
 
     def _cooldown_deadline(self) -> datetime | None:
         """Return the persisted connectivity cooldown deadline, if valid."""
@@ -746,10 +854,12 @@ class Addon:
                 value = json.load(file)
             if isinstance(value, dict) and isinstance(value.get("people"), dict):
                 return {
-                    "version": 5,
+                    "version": 6,
                     "key_salt": value.get("key_salt"),
                     "cooldown_until": value.get("cooldown_until"),
                     "cooldown_error_type": value.get("cooldown_error_type"),
+                    "last_attempt_at": value.get("last_attempt_at"),
+                    "options_fingerprint": value.get("options_fingerprint"),
                     "people": {
                         str(key): _normalize_person_state(person_state)
                         for key, person_state in value["people"].items()
@@ -758,7 +868,7 @@ class Addon:
                 }
             if isinstance(value, dict) and "penalties" in value:
                 return {
-                    "version": 5,
+                    "version": 6,
                     "key_salt": None,
                     "people": {"primary": _normalize_person_state(value)},
                 }
@@ -774,7 +884,7 @@ class Addon:
                 os.chmod(corrupt, 0o600)
             except OSError as move_err:
                 _LOGGER.warning("Could not preserve invalid state file: %s", move_err)
-        return {"version": 5, "key_salt": None, "people": {}}
+        return {"version": 6, "key_salt": None, "people": {}}
 
     def _save_state(self, value: dict[str, Any]) -> None:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -800,9 +910,39 @@ def _empty_person_state() -> dict[str, Any]:
 def _normalize_person_state(value: dict[str, Any]) -> dict[str, Any]:
     """Migrate one saved profile while retaining previously seen records."""
     state = dict(value)
-    penalties = state.get("penalties")
-    if not isinstance(penalties, list):
-        penalties = []
+    raw_penalties = state.get("penalties")
+    penalties_by_key: dict[str, dict[str, Any]] = {}
+    if isinstance(raw_penalties, list):
+        for raw in raw_penalties:
+            if not isinstance(raw, dict):
+                continue
+            raw_details = raw.get("details")
+            details = (
+                {str(key): str(item) for key, item in raw_details.items()}
+                if isinstance(raw_details, dict)
+                else {}
+            )
+            old_key = str(raw.get("key") or "")
+            new_key = penalty_key(details) if details else old_key
+            if not new_key:
+                continue
+            try:
+                amount = (
+                    int(raw["amount"]) if raw.get("amount") is not None else None
+                )
+            except (TypeError, ValueError):
+                amount = None
+            item = {
+                "key": new_key,
+                "summary": str(raw.get("summary") or "交通違規罰單"),
+                "amount": amount,
+                "details": details,
+            }
+            legacy_key = str(raw.get("legacy_key") or old_key)
+            if legacy_key and legacy_key != new_key:
+                item["legacy_key"] = legacy_key
+            penalties_by_key[new_key] = item
+    penalties = list(penalties_by_key.values())
     state["penalties"] = penalties
     seen = state.get("seen_keys")
     if not isinstance(seen, list):

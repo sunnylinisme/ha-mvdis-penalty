@@ -3,7 +3,7 @@
 import ssl
 
 import pytest
-from mvdis import CaptchaError, mvdis_ssl_context, parse_response
+from mvdis import CaptchaError, mvdis_ssl_context, parse_response, penalty_key
 
 
 def test_mvdis_tls_keeps_verification_without_strict_mode() -> None:
@@ -78,3 +78,30 @@ def test_due_date_is_not_misread_as_money() -> None:
     data = parse_response(html)
     assert len(data.penalties) == 1
     assert data.penalties[0].amount is None
+
+
+def test_same_day_penalties_with_different_details_remain_distinct() -> None:
+    html = """
+      <table>
+        <tr><th>違規日期</th><th>違規事實</th><th>違規地點</th><th>應繳金額</th></tr>
+        <tr><td>115/01/02</td><td>超速</td><td>甲路口</td><td>1,200</td></tr>
+        <tr><td>115/01/02</td><td>違規停車</td><td>乙路口</td><td>900</td></tr>
+      </table>
+    """
+
+    data = parse_response(html)
+
+    assert len(data.penalties) == 2
+    assert len({item.key for item in data.penalties}) == 2
+    assert {item.amount for item in data.penalties} == {900, 1200}
+
+
+def test_official_ticket_number_remains_stable_when_other_fields_change() -> None:
+    original = {"舉發單號": "ABC123", "違規事實": "超速", "應繳金額": "1,200"}
+    updated = {
+        "舉發單號": "ABC123",
+        "違規事實": "超速逾限",
+        "應繳金額": "1,600",
+    }
+
+    assert penalty_key(original) == penalty_key(updated)

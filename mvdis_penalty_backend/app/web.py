@@ -204,12 +204,14 @@ function metric(label,value){const box=el("div",undefined,"metric");box.append(e
 function render(data){
  const root=document.querySelector("#people");root.replaceChildren();
  const cooling=Boolean(data.cooldown_until);
- document.querySelector("#refresh").disabled=data.refreshing||cooling||Boolean(data.configuration_error);
+ const guarded=Boolean(data.next_allowed_query_at);
+ document.querySelector("#refresh").disabled=data.refreshing||cooling||guarded||Boolean(data.configuration_error);
  document.querySelector("#notice").textContent=data.configuration_error?"設定尚未通過驗證":
   (data.refreshing?"正在查詢監理服務網…":cooling?
    "監理服務網目前無法連線，將於 "+time(data.cooldown_until)+" 自動重試":
    "最近更新："+time(data.last_refresh_at)+
-   "　下次更新："+time(data.next_refresh_at));
+   "　下次更新："+time(data.next_refresh_at)+
+   (guarded?"　可再次立即查詢："+time(data.next_allowed_query_at):""));
  if(data.configuration_error){
   const card=el("article",undefined,"card");
   card.append(el("h2","請修正查詢人設定"),el("div",data.configuration_error,"error-box"),
