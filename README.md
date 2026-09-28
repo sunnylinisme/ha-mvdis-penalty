@@ -37,6 +37,8 @@ Add-on 使用 GitHub 預先建置的映像檔；Home Assistant 只需下載完�
 
 以上固定 ID 屬於主要查詢人，升級後既有儀表板與自動化可以繼續使用。其他查詢人會各自建立同樣的 5 個實體，ID 會加入一段以本機隨機金鑰產生、不含身分證字號的識別碼，例如 `sensor.mvdis_penalty_a1b2c3d4e5_unpaid_count`；Home Assistant 介面顯示的名稱會使用你設定的查詢人名稱。
 
+每位查詢人另有一個可搜尋的群組實體，主要查詢人為 `group.mvdis_penalty`，其他查詢人的群組 ID 會包含相同的本機識別碼。點開群組即可集中查看該人的 5 個實體。由 Add-on 直接建立的實體在「裝置與服務」頁仍可能列於「未分組」，這是 Home Assistant REST 狀態實體的限制，不影響群組、查詢或通知。
+
 每位查詢人的第一次成功查詢只會建立各自基準，不會把原本已存在的紀錄誤報為「新罰單」。之後若發現未見過的紀錄，Add-on 會建立 Home Assistant 永久通知，並觸發 `mvdis_penalty_new_case` 事件。事件資料中的 `profile` 是發現新紀錄的查詢人名稱。
 
 ## 手機通知（選用）
