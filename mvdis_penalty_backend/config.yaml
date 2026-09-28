@@ -1,5 +1,5 @@
 name: 台灣監理站罰單通知
-version: "0.3.1"
+version: "0.4.0"
 slug: mvdis_penalty_backend
 description: 自動查詢監理服務網、在本機辨識驗證碼並通知新罰單
 url: https://github.com/sunnylinisme/ha-mvdis-penalty
@@ -10,6 +10,11 @@ startup: services
 boot: auto
 init: false
 homeassistant_api: true
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:car-brake-alert
+panel_title: 監理站罰單
+panel_admin: true
 options:
   primary_name: 主要查詢人
   uid: null
