@@ -19,7 +19,7 @@ def test_addon_metadata_uses_supported_private_defaults() -> None:
     config = yaml.safe_load(
         (ROOT / "mvdis_penalty_backend" / "config.yaml").read_text(encoding="utf-8")
     )
-    assert config["version"] == "0.5.2"
+    assert config["version"] == "0.5.3"
     assert config["arch"] == ["amd64", "aarch64"]
     assert config["startup"] == "application"
     assert config["stage"] == "stable"
