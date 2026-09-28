@@ -32,6 +32,7 @@ STATE_PATH = DATA_DIR / "state.json"
 HA_API = "http://supervisor/core/api"
 MAX_PEOPLE = 5
 MAX_SEEN_KEYS = 500
+OPTIONS_POLL_SECONDS = 5.0
 _NATIONAL_ID_CODES = {
     letter: value
     for letter, value in zip(
@@ -75,12 +76,13 @@ def _validate_person(
     clean_name = str(name or "").strip()
     clean_uid = str(uid or "").strip().upper()
     clean_birthday = str(birthday or "").strip()
+    profile_name = clean_name or ("主要查詢人" if primary else "其他查詢人")
     if not clean_name or len(clean_name) > 30:
-        raise ValueError("查詢人名稱必須為 1 到 30 個字元")
+        raise ValueError(f"{profile_name}：名稱必須為 1 到 30 個字元")
     if not _valid_national_id(clean_uid):
-        raise ValueError("身分證字號格式或檢查碼不正確")
+        raise ValueError(f"{profile_name}：身分證字號格式或檢查碼不正確")
     if not re.fullmatch(r"\d{7}", clean_birthday):
-        raise ValueError("民國出生年月日必須為七碼數字")
+        raise ValueError(f"{profile_name}：民國出生年月日必須為七碼數字")
     try:
         date(
             int(clean_birthday[:3]) + 1911,
@@ -88,7 +90,7 @@ def _validate_person(
             int(clean_birthday[5:]),
         )
     except ValueError as err:
-        raise ValueError("民國出生年月日不是有效日期") from err
+        raise ValueError(f"{profile_name}：民國出生年月日不是有效日期") from err
     return Person(
         key="primary" if primary else _person_key(clean_uid, key_salt),
         name=clean_name,
@@ -599,6 +601,7 @@ class Addon:
 
     def run(self) -> None:
         self.refresh()
+        options_fingerprint = self._options_fingerprint()
         while not self._stop.is_set():
             try:
                 interval = self._load_options()["scan_interval_hours"] * 3600
@@ -607,13 +610,34 @@ class Addon:
                 interval = 3600
             with self._state_lock:
                 self._next_refresh_at = datetime.now(UTC) + timedelta(seconds=interval)
-            if self._stop.wait(interval):
-                with self._state_lock:
-                    self._next_refresh_at = None
-                return
+                deadline = self._next_refresh_at
+            options_changed = False
+            while not self._stop.is_set():
+                remaining = max(0.0, (deadline - datetime.now(UTC)).total_seconds())
+                if remaining == 0:
+                    break
+                if self._stop.wait(min(OPTIONS_POLL_SECONDS, remaining)):
+                    break
+                current_fingerprint = self._options_fingerprint()
+                if current_fingerprint != options_fingerprint:
+                    options_fingerprint = current_fingerprint
+                    options_changed = True
+                    _LOGGER.info("Add-on options changed; validating and querying now")
+                    break
             with self._state_lock:
                 self._next_refresh_at = None
+            if self._stop.is_set():
+                return
             self.refresh()
+            if not options_changed:
+                options_fingerprint = self._options_fingerprint()
+
+    def _options_fingerprint(self) -> bytes | None:
+        """Detect Supervisor option saves without exposing their sensitive values."""
+        try:
+            return hashlib.sha256(OPTIONS_PATH.read_bytes()).digest()
+        except OSError:
+            return None
 
     def _load_options(self) -> dict[str, Any]:
         with OPTIONS_PATH.open(encoding="utf-8") as file:
