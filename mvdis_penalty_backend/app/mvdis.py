@@ -117,9 +117,15 @@ class Penalty:
     key: str
     summary: str
     amount: int | None
+    details: dict[str, str]
 
     def as_dict(self) -> dict[str, Any]:
-        return {"key": self.key, "summary": self.summary, "amount": self.amount}
+        return {
+            "key": self.key,
+            "summary": self.summary,
+            "amount": self.amount,
+            "details": dict(self.details),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,6 +231,7 @@ def parse_response(html: str) -> QueryResult:
                 key=key,
                 summary=_summary(fields),
                 amount=_amount(fields),
+                details=fields,
             )
 
     if penalties:
