@@ -12,7 +12,7 @@ import secrets
 import signal
 import threading
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +31,15 @@ OPTIONS_PATH = DATA_DIR / "options.json"
 STATE_PATH = DATA_DIR / "state.json"
 HA_API = "http://supervisor/core/api"
 MAX_PEOPLE = 5
+MAX_SEEN_KEYS = 500
+_NATIONAL_ID_CODES = {
+    letter: value
+    for letter, value in zip(
+        "ABCDEFGHJKLMNPQRSTUVXYWZIO",
+        range(10, 36),
+        strict=True,
+    )
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,11 +76,19 @@ def _validate_person(
     clean_uid = str(uid or "").strip().upper()
     clean_birthday = str(birthday or "").strip()
     if not clean_name or len(clean_name) > 30:
-        raise ValueError("Profile name must contain 1 to 30 characters")
-    if not re.fullmatch(r"[A-Z][12]\d{8}", clean_uid):
-        raise ValueError("National ID format is invalid")
+        raise ValueError("查詢人名稱必須為 1 到 30 個字元")
+    if not _valid_national_id(clean_uid):
+        raise ValueError("身分證字號格式或檢查碼不正確")
     if not re.fullmatch(r"\d{7}", clean_birthday):
-        raise ValueError("ROC birth date must contain seven digits")
+        raise ValueError("民國出生年月日必須為七碼數字")
+    try:
+        date(
+            int(clean_birthday[:3]) + 1911,
+            int(clean_birthday[3:5]),
+            int(clean_birthday[5:]),
+        )
+    except ValueError as err:
+        raise ValueError("民國出生年月日不是有效日期") from err
     return Person(
         key="primary" if primary else _person_key(clean_uid, key_salt),
         name=clean_name,
@@ -79,6 +96,21 @@ def _validate_person(
         birthday=clean_birthday,
         primary=primary,
     )
+
+
+def _valid_national_id(value: str) -> bool:
+    """Validate the format and checksum of a Taiwan national ID."""
+    if not re.fullmatch(r"[A-Z][12]\d{8}", value):
+        return False
+    code = _NATIONAL_ID_CODES[value[0]]
+    digits = [int(character) for character in value[1:]]
+    checksum = code // 10 + (code % 10) * 9
+    checksum += sum(
+        digit * weight
+        for digit, weight in zip(digits[:-1], range(8, 0, -1), strict=True)
+    )
+    checksum += digits[-1]
+    return checksum % 10 == 0
 
 
 def parse_options(raw: dict[str, Any], *, key_salt: str) -> dict[str, Any]:
@@ -96,12 +128,12 @@ def parse_options(raw: dict[str, Any], *, key_salt: str) -> dict[str, Any]:
     if additional is None:
         additional = []
     if not isinstance(additional, list):
-        raise ValueError("Additional people must be a list")
+        raise ValueError("其他查詢人設定必須是清單")
     if len(additional) + 1 > MAX_PEOPLE:
-        raise ValueError(f"At most {MAX_PEOPLE} people can be configured")
+        raise ValueError(f"最多只能設定 {MAX_PEOPLE} 位查詢人")
     for value in additional:
         if not isinstance(value, dict):
-            raise ValueError("Each additional person must be an object")
+            raise ValueError("每位其他查詢人都必須有完整設定")
         people.append(
             _validate_person(
                 value.get("name"),
@@ -112,7 +144,7 @@ def parse_options(raw: dict[str, Any], *, key_salt: str) -> dict[str, Any]:
             )
         )
     if len({person.uid for person in people}) != len(people):
-        raise ValueError("The same identity cannot be configured more than once")
+        raise ValueError("同一身分證字號不能重複設定")
     return {
         "people": people,
         "scan_interval_hours": max(
@@ -127,12 +159,21 @@ def new_penalties(
     current: list[dict[str, Any]],
     *,
     baseline: bool,
+    seen_keys: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Return records that were not present in the previous successful query."""
+    """Return records that have never been reported for this profile."""
     if baseline:
         return []
-    previous_keys = {str(item.get("key", "")) for item in previous}
-    return [item for item in current if str(item.get("key", "")) not in previous_keys]
+    known_keys = {str(key) for key in (seen_keys or []) if isinstance(key, str) and key}
+    known_keys.update(str(item.get("key", "")) for item in previous)
+    return [item for item in current if str(item.get("key", "")) not in known_keys]
+
+
+def merge_seen_keys(previous: list[str], current: list[dict[str, Any]]) -> list[str]:
+    """Keep a bounded, insertion-ordered history of record identifiers."""
+    keys = [key for key in previous if isinstance(key, str) and key]
+    keys.extend(str(item.get("key", "")) for item in current if item.get("key"))
+    return list(dict.fromkeys(keys))[-MAX_SEEN_KEYS:]
 
 
 def total_amount(penalties: list[dict[str, Any]]) -> int:
@@ -288,9 +329,9 @@ class HomeAssistantPublisher:
         )
         self._publish_group(person)
 
-    def publish_test_notification(self, person: Person) -> None:
+    def publish_test_notification(self, person: Person) -> bool:
         """Send a clearly marked notification without changing penalty state."""
-        self._post(
+        return self._post(
             "/services/persistent_notification/create",
             {
                 "notification_id": f"mvdis_penalty_test_{person.key}",
@@ -343,7 +384,7 @@ class HomeAssistantPublisher:
             {"state": str(state), "attributes": attributes},
         )
 
-    def _post(self, path: str, payload: dict[str, Any]) -> None:
+    def _post(self, path: str, payload: dict[str, Any]) -> bool:
         if not self._token:
             if not self._warned_missing_token:
                 _LOGGER.warning(
@@ -351,7 +392,7 @@ class HomeAssistantPublisher:
                     "Home Assistant updates are disabled"
                 )
                 self._warned_missing_token = True
-            return
+            return False
         try:
             response = requests.post(
                 f"{HA_API}{path}",
@@ -363,8 +404,10 @@ class HomeAssistantPublisher:
                 timeout=15,
             )
             response.raise_for_status()
+            return True
         except requests.RequestException as err:
             _LOGGER.warning("Home Assistant API update failed for %s: %s", path, err)
+            return False
 
     def _delete(self, path: str) -> None:
         if not self._token:
@@ -427,7 +470,10 @@ class Addon:
                 penalties = [item.as_dict() for item in result.penalties]
                 baseline = not bool(previous.get("checked_at"))
                 added = new_penalties(
-                    previous.get("penalties", []), penalties, baseline=baseline
+                    previous.get("penalties", []),
+                    penalties,
+                    baseline=baseline,
+                    seen_keys=previous.get("seen_keys", []),
                 )
                 cleared = bool(
                     previous.get("checked_at")
@@ -437,6 +483,9 @@ class Addon:
                 state = {
                     "checked_at": result.checked_at.isoformat(),
                     "penalties": penalties,
+                    "seen_keys": merge_seen_keys(
+                        previous.get("seen_keys", []), penalties
+                    ),
                     "error": None,
                     "error_type": None,
                 }
@@ -508,25 +557,29 @@ class Addon:
         person = next((item for item in people if item.key == profile_key), None)
         if person is None:
             return False
-        self._publisher.publish_test_notification(person)
-        return True
+        return self._publisher.publish_test_notification(person)
 
     def public_status(self) -> dict[str, Any]:
         """Return a snapshot safe to expose in the authenticated ingress UI."""
+        configuration_error = None
         try:
             people = self._load_options()["people"]
-        except Exception:
+        except Exception as err:
             people = []
+            configuration_error = str(err)
         with self._state_lock:
             people_state = json.loads(json.dumps(self._state.get("people", {})))
         return {
-            "version": 1,
+            "version": 2,
             "refreshing": self._refresh_lock.locked(),
+            "configuration_error": configuration_error,
             "people": [
                 {
                     "key": person.key,
                     "name": person.name,
-                    **people_state.get(person.key, _empty_person_state()),
+                    **_public_person_state(
+                        people_state.get(person.key, _empty_person_state())
+                    ),
                 }
                 for person in people
             ],
@@ -557,25 +610,42 @@ class Addon:
                 value = json.load(file)
             if isinstance(value, dict) and isinstance(value.get("people"), dict):
                 return {
-                    "version": 3,
+                    "version": 4,
                     "key_salt": value.get("key_salt"),
-                    "people": value["people"],
+                    "people": {
+                        str(key): _normalize_person_state(person_state)
+                        for key, person_state in value["people"].items()
+                        if isinstance(person_state, dict)
+                    },
                 }
             if isinstance(value, dict) and "penalties" in value:
                 return {
-                    "version": 3,
+                    "version": 4,
                     "key_salt": None,
-                    "people": {"primary": value},
+                    "people": {"primary": _normalize_person_state(value)},
                 }
-        except (FileNotFoundError, json.JSONDecodeError):
+        except FileNotFoundError:
             pass
-        return {"version": 3, "key_salt": None, "people": {}}
+        except json.JSONDecodeError as err:
+            _LOGGER.warning(
+                "State file is invalid; preserving it for recovery: %s", err
+            )
+            corrupt = STATE_PATH.with_name("state.corrupt.json")
+            try:
+                os.replace(STATE_PATH, corrupt)
+                os.chmod(corrupt, 0o600)
+            except OSError as move_err:
+                _LOGGER.warning("Could not preserve invalid state file: %s", move_err)
+        return {"version": 4, "key_salt": None, "people": {}}
 
     def _save_state(self, value: dict[str, Any]) -> None:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         temporary = STATE_PATH.with_suffix(".tmp")
         with temporary.open("w", encoding="utf-8") as file:
             json.dump(value, file, ensure_ascii=False)
+            file.flush()
+            os.fsync(file.fileno())
+        os.chmod(temporary, 0o600)
         os.replace(temporary, STATE_PATH)
 
 
@@ -583,8 +653,38 @@ def _empty_person_state() -> dict[str, Any]:
     return {
         "checked_at": None,
         "penalties": [],
+        "seen_keys": [],
         "error": "Waiting for the first query",
         "error_type": "waiting",
+    }
+
+
+def _normalize_person_state(value: dict[str, Any]) -> dict[str, Any]:
+    """Migrate one saved profile while retaining previously seen records."""
+    state = dict(value)
+    penalties = state.get("penalties")
+    if not isinstance(penalties, list):
+        penalties = []
+    state["penalties"] = penalties
+    seen = state.get("seen_keys")
+    if not isinstance(seen, list):
+        seen = []
+    state["seen_keys"] = merge_seen_keys(seen, penalties)
+    return state
+
+
+def _public_person_state(value: dict[str, Any]) -> dict[str, Any]:
+    """Expose only dashboard fields, excluding internal de-duplication history."""
+    return {
+        key: value.get(key)
+        for key in (
+            "checked_at",
+            "penalties",
+            "error",
+            "error_type",
+            "failed_at",
+        )
+        if key in value
     }
 
 

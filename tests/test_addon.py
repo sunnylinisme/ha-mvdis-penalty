@@ -7,9 +7,11 @@ import requests
 import server
 from ocr import ctc_decode
 from server import (
+    _NATIONAL_ID_CODES,
     Person,
     _notification_message,
     classify_error,
+    merge_seen_keys,
     new_penalties,
     parse_options,
     total_amount,
@@ -23,6 +25,16 @@ def _item(key: str, amount: int | None = None) -> dict:
     return {"key": key, "summary": f"record-{key}", "amount": amount}
 
 
+def _national_id(letter: str) -> str:
+    body = [1, 2, 3, 4, 5, 6, 7, 8]
+    code = _NATIONAL_ID_CODES[letter]
+    subtotal = code // 10 + (code % 10) * 9
+    subtotal += sum(
+        digit * weight for digit, weight in zip(body, range(8, 0, -1), strict=True)
+    )
+    return letter + "".join(map(str, body)) + str(-subtotal % 10)
+
+
 def test_first_result_is_baseline() -> None:
     assert new_penalties([], [_item("a")], baseline=True) == []
 
@@ -34,6 +46,19 @@ def test_only_unseen_records_are_new() -> None:
         baseline=False,
     )
     assert added == [_item("b", 1200)]
+
+
+def test_seen_history_prevents_a_reappearing_record_notification() -> None:
+    assert (
+        new_penalties(
+            [],
+            [_item("old")],
+            baseline=False,
+            seen_keys=["old"],
+        )
+        == []
+    )
+    assert merge_seen_keys(["old"], [_item("new")]) == ["old", "new"]
 
 
 def test_amount_and_notification_message() -> None:
@@ -152,7 +177,11 @@ def test_parse_options_keeps_existing_single_person_configuration() -> None:
 
 def test_parse_options_supports_five_people_and_rejects_duplicates() -> None:
     people = [
-        {"name": f"家人 {index}", "uid": f"{letter}123456789", "birthday": "0800101"}
+        {
+            "name": f"家人 {index}",
+            "uid": _national_id(letter),
+            "birthday": "0800101",
+        }
         for index, letter in enumerate("BCDE", start=1)
     ]
     options = parse_options(
@@ -178,9 +207,25 @@ def test_parse_options_supports_five_people_and_rejects_duplicates() -> None:
             key_salt=KEY_SALT,
         )
     except ValueError as err:
-        assert "same identity" in str(err)
+        assert "不能重複設定" in str(err)
     else:
         raise AssertionError("duplicate identity was accepted")
+
+
+def test_parse_options_rejects_bad_checksum_and_impossible_birth_date() -> None:
+    for uid, birthday in (
+        ("A123456788", "0780702"),
+        ("A123456789", "0780230"),
+    ):
+        try:
+            parse_options(
+                {"uid": uid, "birthday": birthday},
+                key_salt=KEY_SALT,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid identity data was accepted")
 
 
 def test_ctc_decode_matches_blank_and_repeat_rules() -> None:
@@ -202,8 +247,9 @@ def test_legacy_state_is_migrated_to_primary_profile(monkeypatch, tmp_path) -> N
     monkeypatch.setattr(server, "DATA_DIR", tmp_path)
     monkeypatch.setattr(server, "STATE_PATH", state_path)
     addon = server.Addon()
-    assert addon._state["version"] == 3
+    assert addon._state["version"] == 4
     assert addon._state["people"]["primary"]["penalties"] == [_item("old")]
+    assert addon._state["people"]["primary"]["seen_keys"] == ["old"]
 
 
 def test_error_categories_are_stable() -> None:
@@ -227,12 +273,12 @@ def test_remove_profile_deletes_entities_and_group(monkeypatch) -> None:
     monkeypatch.setattr(
         server.requests,
         "post",
-        lambda url, *, json, **kwargs: (posts.append((url, json)) or Response()),
+        lambda url, *, json, **kwargs: posts.append((url, json)) or Response(),
     )
     monkeypatch.setattr(
         server.requests,
         "delete",
-        lambda url, **kwargs: (deletes.append(url) or Response()),
+        lambda url, **kwargs: deletes.append(url) or Response(),
     )
     publisher = server.HomeAssistantPublisher()
     publisher.remove_profile("abc123")
@@ -254,7 +300,7 @@ def test_cleared_result_creates_confirmation(monkeypatch) -> None:
     monkeypatch.setattr(
         server.requests,
         "post",
-        lambda url, *, json, **kwargs: (calls.append((url, json)) or Response()),
+        lambda url, *, json, **kwargs: calls.append((url, json)) or Response(),
     )
     publisher = server.HomeAssistantPublisher()
     person = Person("primary", "本人", "A123456789", "0780702", primary=True)
@@ -302,6 +348,49 @@ def test_public_status_does_not_expose_identity(monkeypatch, tmp_path) -> None:
     assert status["people"][0]["name"] == "本人"
     assert "A123456789" not in serialized
     assert "0780702" not in serialized
+    assert "seen_keys" not in serialized
+
+
+def test_public_status_explains_invalid_configuration_safely(
+    monkeypatch, tmp_path
+) -> None:
+    options_path = tmp_path / "options.json"
+    options_path.write_text(
+        json.dumps(
+            {
+                "primary_name": "本人",
+                "uid": "A123456788",
+                "birthday": "0780702",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(server, "STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(server, "OPTIONS_PATH", options_path)
+    addon = server.Addon()
+
+    status = addon.public_status()
+    serialized = json.dumps(status, ensure_ascii=False)
+    assert status["people"] == []
+    assert "檢查碼" in status["configuration_error"]
+    assert "A123456788" not in serialized
+    assert "0780702" not in serialized
+
+
+def test_test_notification_reports_home_assistant_failure(monkeypatch) -> None:
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
+    monkeypatch.setattr(
+        server.requests,
+        "post",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            requests.ConnectionError("unavailable")
+        ),
+    )
+    publisher = server.HomeAssistantPublisher()
+    person = Person("primary", "本人", "A123456789", "0780702", primary=True)
+
+    assert publisher.publish_test_notification(person) is False
 
 
 def test_ingress_dashboard_status_and_actions(monkeypatch) -> None:
@@ -333,6 +422,9 @@ def test_ingress_dashboard_status_and_actions(monkeypatch) -> None:
 
         status = requests.get(f"{base}/api/status", timeout=2)
         assert status.json()["people"] == []
+
+        health = requests.get(f"{base}/health", timeout=2)
+        assert health.json() == {"status": "ok"}
 
         refresh = requests.post(
             f"{base}/api/refresh",

@@ -15,6 +15,7 @@ import requests
 from bs4 import BeautifulSoup
 from ocr import LocalOcr
 from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -157,7 +158,22 @@ class MvdisQuery:
     def query(self, uid: str, birthday: str, max_retries: int) -> QueryResult:
         for attempt in range(max_retries):
             with requests.Session() as session:
-                session.mount(f"{BASE_URL}/", MvdisTlsAdapter())
+                session.mount(
+                    f"{BASE_URL}/",
+                    MvdisTlsAdapter(
+                        max_retries=Retry(
+                            total=2,
+                            connect=2,
+                            read=2,
+                            status=2,
+                            allowed_methods=frozenset({"GET", "POST"}),
+                            status_forcelist=(429, 500, 502, 503, 504),
+                            backoff_factor=0.5,
+                            respect_retry_after_header=True,
+                            raise_on_status=False,
+                        )
+                    ),
+                )
                 session.headers.update(HEADERS)
                 page = session.get(QUERY_URL, timeout=30)
                 page.raise_for_status()
@@ -275,7 +291,7 @@ def _summary(fields: dict[str, str]) -> str:
 
 def _amount(fields: dict[str, str]) -> int | None:
     for key, value in fields.items():
-        if any(part in key for part in ("金額", "罰鍰", "應繳")):
+        if "金額" in key or "罰鍰" in key or key in {"應繳", "應納"}:
             digits = re.sub(r"[^0-9]", "", value)
             if digits:
                 return int(digits)
@@ -288,10 +304,7 @@ def _compact_text(html: str) -> str:
 
 def _has_captcha_error(html: str, compact: str) -> bool:
     """Detect CAPTCHA errors, including messages injected by JavaScript."""
-    return any(
-        message in compact or message in html
-        for message in CAPTCHA_ERRORS
-    )
+    return any(message in compact or message in html for message in CAPTCHA_ERRORS)
 
 
 def _clean(value: str) -> str:

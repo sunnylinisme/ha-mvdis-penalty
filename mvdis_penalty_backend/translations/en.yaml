@@ -4,7 +4,7 @@ configuration:
     description: Name shown in Home Assistant entities and notifications.
   uid:
     name: National ID number
-    description: Your own Taiwanese national ID, for example A123456789.
+    description: Your own Taiwanese national ID; its format and checksum are validated.
   birthday:
     name: ROC birth date
     description: Seven digits, for example 0780702 for ROC year 78, July 2.
@@ -17,7 +17,7 @@ configuration:
         description: Display name used in entities and notifications.
       uid:
         name: National ID number
-        description: Taiwanese national ID for this profile.
+        description: Taiwanese national ID for this profile; its checksum is validated.
       birthday:
         name: ROC birth date
         description: Seven digits, for example 0780702.

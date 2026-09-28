@@ -30,8 +30,8 @@ COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --no-compile --requirement /tmp/requirements.txt \
     && rm /tmp/requirements.txt
 
-COPY app /app
 COPY --from=ocr-assets /ocr_assets /app/ocr_assets
+COPY app /app
 COPY THIRD_PARTY_NOTICES.md /app/THIRD_PARTY_NOTICES.md
 
 EXPOSE 8099
