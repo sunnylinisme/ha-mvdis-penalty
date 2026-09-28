@@ -79,7 +79,7 @@ mode: queued
 
 ### 為什麼舊版安裝或更新很久？
 
-`0.2.x` 的預先建置映像檔包含完整 OCR 套件、數套未使用的模型與 OpenCV，下載量約 209 MiB。`0.3.0` 起完整映像已縮小到約 84 MiB。`0.5.0` 再將約 42 MiB 的 OCR 模型做成可重用的固定圖層；升級到 `0.5.0` 時仍需下載一次，之後僅修改程式碼的版本可沿用模型圖層。實際時間仍取決於網路、GitHub Container Registry 連線及 Home Assistant 主機的儲存速度。若持續超過 15 分鐘，可到「設定 → 系統 → 日誌」查看 Supervisor 下載或解壓錯誤。
+`0.2.x` 的預先建置映像檔包含完整 OCR 套件、數套未使用的模型與 OpenCV，下載量約 209 MiB。`0.3.0` 起完整映像已縮小到約 84 MiB。`0.5.0` 再將約 49 MiB 的 Python/OCR 執行相依套件與模型做成可重用的固定圖層；升級到 `0.5.0` 時仍需下載一次，之後僅修改程式碼的版本可沿用這些大型圖層。實際時間仍取決於網路、GitHub Container Registry 連線及 Home Assistant 主機的儲存速度。若持續超過 15 分鐘，可到「設定 → 系統 → 日誌」查看 Supervisor 下載或解壓錯誤。
 
 ### 日誌顯示 `Missing Subject Key Identifier`
 
