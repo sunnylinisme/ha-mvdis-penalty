@@ -333,6 +333,32 @@ class HomeAssistantPublisher:
         )
         self._publish_group(person)
 
+    def restore_profile(self, person: Person, state: dict[str, Any]) -> None:
+        """Restore all cached entities without producing events or notifications."""
+        checked_at = state.get("checked_at")
+        cached = {
+            "checked_at": checked_at or "unknown",
+            "penalties": (
+                state.get("penalties", [])
+                if isinstance(state.get("penalties"), list)
+                else []
+            ),
+        }
+        self.publish_result(
+            person,
+            cached,
+            [],
+            baseline=not bool(checked_at),
+            cleared=False,
+        )
+        if state.get("error"):
+            self.publish_error(
+                person,
+                str(state["error"]),
+                str(state.get("error_type") or "unknown"),
+                str(state.get("failed_at") or datetime.now(UTC).isoformat()),
+            )
+
     def publish_test_notification(self, person: Person) -> bool:
         """Send a clearly marked notification without changing penalty state."""
         return self._post(
@@ -466,6 +492,12 @@ class Addon:
             with self._state_lock:
                 people_state.pop(removed_key, None)
                 self._save_state(self._state)
+
+        for person in options["people"]:
+            self._publisher.restore_profile(
+                person,
+                people_state.get(person.key, _empty_person_state()),
+            )
 
         cooldown_until = self._cooldown_deadline()
         now = datetime.now(UTC)
