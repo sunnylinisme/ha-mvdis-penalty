@@ -7,7 +7,7 @@ from typing import Any
 
 import requests
 import server
-from ocr import ctc_decode
+from ocr import choose_candidate, ctc_decode
 from server import (
     _NATIONAL_ID_CODES,
     Person,
@@ -241,6 +241,24 @@ def test_parse_options_rejects_bad_checksum_and_impossible_birth_date() -> None:
 
 def test_ctc_decode_matches_blank_and_repeat_rules() -> None:
     assert ctc_decode([0, 1, 1, 0, 1, 2, 2, 0], ["", "A", "7"]) == "AA7"
+
+
+def test_ocr_candidate_agreement_wins_over_single_high_confidence_result() -> None:
+    assert (
+        choose_candidate(
+            [
+                ("AB12", 0.95),
+                ("ABIZ", 0.82),
+                ("abiz", 0.78),
+                ("ABIZ!", 0.74),
+            ]
+        )
+        == "ABIZ"
+    )
+
+
+def test_ocr_candidate_prefers_valid_length_then_confidence() -> None:
+    assert choose_candidate([("ABC", 0.99), ("A8C2", 0.71), ("ABC2", 0.83)]) == "ABC2"
 
 
 def test_legacy_state_is_migrated_to_primary_profile(monkeypatch, tmp_path) -> None:
