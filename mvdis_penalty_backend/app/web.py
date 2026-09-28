@@ -59,9 +59,12 @@ def _handler_for(addon: DashboardAddon) -> type[BaseHTTPRequestHandler]:
         server_version = "MvdisPenalty/1"
 
         def do_GET(self) -> None:  # noqa: N802
+            path = urlsplit(self.path).path.rstrip("/") or "/"
+            if path == "/health":
+                self._send_json(HTTPStatus.OK, {"status": "ok"})
+                return
             if not self._allow_ingress():
                 return
-            path = urlsplit(self.path).path.rstrip("/") or "/"
             if path == "/":
                 self._send(HTTPStatus.OK, DASHBOARD_HTML, "text/html; charset=utf-8")
                 return
@@ -107,7 +110,10 @@ def _handler_for(addon: DashboardAddon) -> type[BaseHTTPRequestHandler]:
 
         def _read_json(self) -> dict[str, Any]:
             try:
-                length = min(int(self.headers.get("Content-Length", "0")), 4096)
+                length = max(
+                    0,
+                    min(int(self.headers.get("Content-Length", "0")), 4096),
+                )
                 value = json.loads(self.rfile.read(length) or b"{}")
             except ValueError:
                 return {}
@@ -198,7 +204,8 @@ function metric(label,value){const box=el("div",undefined,"metric");box.append(e
 function render(data){
  const root=document.querySelector("#people");root.replaceChildren();
  document.querySelector("#refresh").disabled=data.refreshing;
- document.querySelector("#notice").textContent=data.refreshing?"正在查詢監理服務網…":"每頁會自動更新狀態";
+ document.querySelector("#notice").textContent=data.configuration_error?"設定錯誤："+data.configuration_error:
+  (data.refreshing?"正在查詢監理服務網…":"每頁會自動更新狀態");
  for(const person of data.people){
   const card=el("article",undefined,"card"),head=el("div",undefined,"card-head"),title=el("div");
   title.append(el("h2",person.name),el("div","最後查詢："+time(person.checked_at),"muted"));
