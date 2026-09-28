@@ -19,7 +19,7 @@ def test_addon_metadata_uses_supported_private_defaults() -> None:
     config = yaml.safe_load(
         (ROOT / "mvdis_penalty_backend" / "config.yaml").read_text(encoding="utf-8")
     )
-    assert config["version"] == "0.5.6"
+    assert config["version"] == "0.6.0"
     assert config["options"]["max_retries"] == 1
     assert config["arch"] == ["amd64", "aarch64"]
     assert config["startup"] == "application"
@@ -41,7 +41,7 @@ def test_state_is_private_and_corruption_is_preserved(monkeypatch, tmp_path) -> 
     addon = server.Addon()
 
     assert (tmp_path / "state.corrupt.json").read_text(encoding="utf-8") == "{broken"
-    assert json.loads(state_path.read_text(encoding="utf-8"))["version"] == 5
+    assert json.loads(state_path.read_text(encoding="utf-8"))["version"] == 6
     assert stat.S_IMODE(state_path.stat().st_mode) == 0o600
     assert stat.S_IMODE((tmp_path / "state.corrupt.json").stat().st_mode) == 0o600
     assert addon._state["people"] == {}
@@ -76,6 +76,7 @@ def test_container_uses_reproducible_dependency_layers() -> None:
     assert "find /python-deps -exec touch -h -d @0 {} +" in dockerfile
     assert "COPY --from=python-deps /python-deps /usr/local" in dockerfile
     assert dockerfile.index("COPY --from=python-deps") < dockerfile.index("COPY app")
+    assert dockerfile.count("python:3.13-slim@sha256:") == 3
 
 
 def test_mvdis_requests_do_not_hide_extra_network_retries() -> None:
@@ -84,3 +85,10 @@ def test_mvdis_requests_do_not_hide_extra_network_retries() -> None:
     )
     assert "Retry(total=0" in source
     assert "PAGE_TIMEOUT = (8, 20)" in source
+
+
+def test_publish_workflow_does_not_follow_a_moving_helper_branch() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "publish.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "home-assistant/actions/helpers/info@master" not in workflow
