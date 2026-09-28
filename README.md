@@ -1,6 +1,6 @@
 # 台灣監理站罰單通知（Home Assistant Add-on）
 
-這是一個 Home Assistant Add-on，會定時查詢使用者本人在台灣監理服務網上的未繳交通違規紀錄，在 Home Assistant 主機本機辨識驗證碼，建立感測器，並在出現新紀錄時發出通知。**只要安裝 Add-on，不需要 HACS。**
+這是一個 Home Assistant Add-on，會定時查詢使用者本人在台灣監理服務網上的未繳交通違規紀錄，在 Home Assistant 主機本機辨識驗證碼，建立感測器，並在出現新紀錄時發出通知。
 
 > [!WARNING]
 > 本專案是非官方的社群作品，與交通部、公路局及監理服務網無關，也未獲其背書。政府網站若改版，查詢功能可能暫時失效。罰單、金額與期限等重要資訊，請務必回到[監理服務網](https://www.mvdis.gov.tw/)確認。
@@ -23,7 +23,7 @@
 5. 啟動 Add-on，並建議開啟「開機時啟動」與「監控程式」。
 6. 到「日誌」確認出現 `MVDIS query succeeded`。
 
-Add-on 使用 GitHub 預先建置的映像檔；Home Assistant 只需下載完成品，不會在主機上編譯或安裝 OCR 套件。下載時間仍會受到網路速度影響。安裝完成後不需要重啟 Home Assistant，也不需要另外加入 HACS 自訂儲存庫。
+Add-on 使用 GitHub 預先建置的映像檔；Home Assistant 只需下載完成品，不會在主機上編譯或安裝 OCR 套件。下載時間仍會受到網路速度影響。安裝完成後不需要重啟 Home Assistant。
 
 ## Home Assistant 實體
 
