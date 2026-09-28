@@ -12,7 +12,7 @@ import secrets
 import signal
 import threading
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -432,6 +432,8 @@ class Addon:
         self._stop = threading.Event()
         self._refresh_lock = threading.Lock()
         self._state_lock = threading.RLock()
+        self._last_refresh_at: datetime | None = None
+        self._next_refresh_at: datetime | None = None
         self._state = self._load_state()
         if not re.fullmatch(r"[0-9a-f]{64}", str(self._state.get("key_salt", ""))):
             self._state["key_salt"] = secrets.token_hex(32)
@@ -528,6 +530,8 @@ class Addon:
                 )
             with self._state_lock:
                 self._save_state(self._state)
+        with self._state_lock:
+            self._last_refresh_at = datetime.now(UTC)
         return self.public_status()
 
     def trigger_refresh(self) -> bool:
@@ -569,9 +573,17 @@ class Addon:
             configuration_error = str(err)
         with self._state_lock:
             people_state = json.loads(json.dumps(self._state.get("people", {})))
+            last_refresh_at = self._last_refresh_at
+            next_refresh_at = self._next_refresh_at
         return {
             "version": 2,
             "refreshing": self._refresh_lock.locked(),
+            "last_refresh_at": (
+                last_refresh_at.isoformat() if last_refresh_at else None
+            ),
+            "next_refresh_at": (
+                next_refresh_at.isoformat() if next_refresh_at else None
+            ),
             "configuration_error": configuration_error,
             "people": [
                 {
@@ -593,8 +605,14 @@ class Addon:
             except Exception as err:
                 _LOGGER.error("Invalid add-on options: %s", err)
                 interval = 3600
+            with self._state_lock:
+                self._next_refresh_at = datetime.now(UTC) + timedelta(seconds=interval)
             if self._stop.wait(interval):
+                with self._state_lock:
+                    self._next_refresh_at = None
                 return
+            with self._state_lock:
+                self._next_refresh_at = None
             self.refresh()
 
     def _load_options(self) -> dict[str, Any]:
