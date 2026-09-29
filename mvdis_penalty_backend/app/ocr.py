@@ -8,6 +8,7 @@ import re
 import threading
 from collections import Counter
 from collections.abc import Iterable
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,21 @@ from typing import Any
 ASSET_DIR = Path(os.environ.get("OCR_ASSET_DIR", "/app/ocr_assets"))
 MODEL_PATH = ASSET_DIR / "common_old.onnx"
 CHARSET_PATH = ASSET_DIR / "charset.json"
+OCR_MIN_AGREEMENT = 3
+# A strict threshold is practical because uncertain images can be replaced
+# without submitting the identity form. Five-image batches keep availability.
+OCR_MIN_CONFIDENCE = 0.95
+
+
+@dataclass(frozen=True, slots=True)
+class OcrDecision:
+    """One ensemble decision, including whether it is safe to submit."""
+
+    code: str
+    confidence: float
+    agreement: int
+    sample_count: int
+    reliable: bool
 
 
 def ctc_decode(indices: Iterable[int], charset: list[str]) -> str:
@@ -29,8 +45,8 @@ def ctc_decode(indices: Iterable[int], charset: list[str]) -> str:
     return "".join(result)
 
 
-def choose_candidate(candidates: Iterable[tuple[str, float]]) -> str:
-    """Choose a four-character CAPTCHA by agreement, then model confidence."""
+def assess_candidates(candidates: Iterable[tuple[str, float]]) -> OcrDecision:
+    """Assess a CAPTCHA by agreement first and calibrated model confidence."""
     normalized = [
         (re.sub(r"[^A-Z0-9]", "", text.upper()), confidence)
         for text, confidence in candidates
@@ -38,7 +54,7 @@ def choose_candidate(candidates: Iterable[tuple[str, float]]) -> str:
     valid = [(text, confidence) for text, confidence in normalized if len(text) == 4]
     pool = valid or normalized
     if not pool:
-        return ""
+        return OcrDecision("", 0.0, 0, 0, False)
 
     votes = Counter(text for text, _confidence in pool)
     best_confidence: dict[str, float] = {}
@@ -46,7 +62,7 @@ def choose_candidate(candidates: Iterable[tuple[str, float]]) -> str:
     for position, (text, confidence) in enumerate(pool):
         best_confidence[text] = max(best_confidence.get(text, 0.0), confidence)
         first_seen.setdefault(text, position)
-    return max(
+    code = max(
         votes,
         key=lambda text: (
             votes[text],
@@ -54,6 +70,20 @@ def choose_candidate(candidates: Iterable[tuple[str, float]]) -> str:
             -first_seen[text],
         ),
     )
+    matching_confidence = [confidence for text, confidence in pool if text == code]
+    confidence = sum(matching_confidence) / len(matching_confidence)
+    agreement = votes[code]
+    reliable = (
+        len(code) == 4
+        and agreement >= OCR_MIN_AGREEMENT
+        and confidence >= OCR_MIN_CONFIDENCE
+    )
+    return OcrDecision(code, confidence, agreement, len(normalized), reliable)
+
+
+def choose_candidate(candidates: Iterable[tuple[str, float]]) -> str:
+    """Choose a four-character CAPTCHA by agreement, then model confidence."""
+    return assess_candidates(candidates).code
 
 
 class LocalOcr:
@@ -66,6 +96,10 @@ class LocalOcr:
 
     def classification(self, image_bytes: bytes) -> str:
         """Recognize one CAPTCHA through several local-only image variants."""
+        return self.analyze(image_bytes).code
+
+    def analyze(self, image_bytes: bytes) -> OcrDecision:
+        """Recognize one CAPTCHA and report ensemble reliability metadata."""
         with self._lock:
             if self._session is None:
                 self._load()
@@ -94,7 +128,7 @@ class LocalOcr:
                 image_array = image_array[np.newaxis, np.newaxis, :, :]
                 output = self._session.run(None, {input_name: image_array})[0]
                 candidates.append(self._decode_output(output, np))
-            return choose_candidate(candidates)
+            return assess_candidates(candidates)
 
     def _decode_output(self, output: Any, np: Any) -> tuple[str, float]:
         """Decode model logits and estimate confidence for emitted characters."""

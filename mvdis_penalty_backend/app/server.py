@@ -41,6 +41,7 @@ MAX_SEEN_KEYS = 1000
 OPTIONS_POLL_SECONDS = 5.0
 OUTAGE_COOLDOWN = timedelta(minutes=30)
 MANUAL_QUERY_GUARD = timedelta(minutes=5)
+CAPTCHA_RETRY_DELAY = timedelta(minutes=15)
 PROFILE_QUERY_DELAY_SECONDS = 2.0
 OUTAGE_ERROR_TYPES = frozenset({"timeout", "network", "http"})
 _NATIONAL_ID_CODES = {
@@ -500,6 +501,9 @@ class Addon:
         self._schedule_wake = threading.Event()
         self._state = self._load_state()
         self._last_refresh_at = self._state_datetime("last_attempt_at")
+        self._last_full_refresh_at = (
+            self._state_datetime("last_full_attempt_at") or self._last_refresh_at
+        )
         self._next_refresh_at: datetime | None = None
         if not re.fullmatch(r"[0-9a-f]{64}", str(self._state.get("key_salt", ""))):
             self._state["key_salt"] = secrets.token_hex(32)
@@ -509,11 +513,21 @@ class Addon:
         self._stop.set()
         self._schedule_wake.set()
 
-    def refresh(self, *, startup: bool = False) -> dict[str, Any]:
+    def refresh(
+        self,
+        *,
+        startup: bool = False,
+        profile_keys: set[str] | None = None,
+    ) -> dict[str, Any]:
         with self._refresh_lock:
-            return self._refresh(startup=startup)
+            return self._refresh(startup=startup, profile_keys=profile_keys)
 
-    def _refresh(self, *, startup: bool = False) -> dict[str, Any]:
+    def _refresh(
+        self,
+        *,
+        startup: bool = False,
+        profile_keys: set[str] | None = None,
+    ) -> dict[str, Any]:
         try:
             options = self._load_options()
         except Exception as err:
@@ -533,6 +547,13 @@ class Addon:
                 person,
                 people_state.get(person.key, _empty_person_state()),
             )
+        selected_people = [
+            person
+            for person in options["people"]
+            if profile_keys is None or person.key in profile_keys
+        ]
+        if not selected_people:
+            return self.public_status()
 
         cooldown_until = self._cooldown_deadline()
         now = datetime.now(UTC)
@@ -571,9 +592,12 @@ class Addon:
                 options_fingerprint.hex() if options_fingerprint else None
             )
             self._last_refresh_at = attempted_at
+            if profile_keys is None:
+                self._state["last_full_attempt_at"] = attempted_at.isoformat()
+                self._last_full_refresh_at = attempted_at
             self._save_state(self._state)
 
-        for index, person in enumerate(options["people"], start=1):
+        for index, person in enumerate(selected_people, start=1):
             if index > 1 and self._stop.wait(PROFILE_QUERY_DELAY_SECONDS):
                 break
             previous = people_state.get(person.key, _empty_person_state())
@@ -605,6 +629,8 @@ class Addon:
                     ),
                     "error": None,
                     "error_type": None,
+                    "captcha_images": result.captcha_images,
+                    "captcha_submissions": result.captcha_submissions,
                 }
                 with self._state_lock:
                     people_state[person.key] = state
@@ -617,11 +643,14 @@ class Addon:
                     cleared=cleared,
                 )
                 _LOGGER.info(
-                    "MVDIS query succeeded for profile %s/%s: %s record(s), %s new",
+                    "MVDIS query succeeded for profile %s/%s: %s record(s), "
+                    "%s new, %s CAPTCHA image(s), %s submission(s)",
                     index,
-                    len(options["people"]),
+                    len(selected_people),
                     len(penalties),
                     len(added),
+                    result.captcha_images,
+                    result.captcha_submissions,
                 )
             except Exception as err:  # One profile must not block the others.
                 failed_at = datetime.now(UTC).isoformat()
@@ -629,13 +658,19 @@ class Addon:
                 _LOGGER.warning(
                     "MVDIS query failed for profile %s/%s: %s",
                     index,
-                    len(options["people"]),
+                    len(selected_people),
                     err,
                 )
                 state = dict(previous)
                 state["error"] = str(err)
                 state["error_type"] = error_type
                 state["failed_at"] = failed_at
+                if error_type == "captcha":
+                    state["captcha_retry_at"] = (
+                        datetime.now(UTC) + CAPTCHA_RETRY_DELAY
+                    ).isoformat()
+                else:
+                    state.pop("captcha_retry_at", None)
                 with self._state_lock:
                     people_state[person.key] = state
                     self._save_state(self._state)
@@ -715,6 +750,7 @@ class Addon:
             cooldown_until = self._cooldown_deadline()
             cooldown_error_type = self._state.get("cooldown_error_type")
             next_allowed_query_at = self._manual_query_deadline()
+            captcha_retry_at = self._captcha_retry_deadline()
         if cooldown_until and cooldown_until <= datetime.now(UTC):
             cooldown_until = None
         if next_allowed_query_at and next_allowed_query_at <= datetime.now(UTC):
@@ -729,12 +765,13 @@ class Addon:
                 next_refresh_at.isoformat() if next_refresh_at else None
             ),
             "configuration_error": configuration_error,
-            "cooldown_until": (
-                cooldown_until.isoformat() if cooldown_until else None
-            ),
+            "cooldown_until": (cooldown_until.isoformat() if cooldown_until else None),
             "cooldown_error_type": cooldown_error_type if cooldown_until else None,
             "next_allowed_query_at": (
                 next_allowed_query_at.isoformat() if next_allowed_query_at else None
+            ),
+            "captcha_retry_at": (
+                captcha_retry_at.isoformat() if captcha_retry_at else None
             ),
             "people": [
                 {
@@ -759,14 +796,21 @@ class Addon:
                 interval = 3600
             with self._state_lock:
                 now = datetime.now(UTC)
-                anchor = self._last_refresh_at or now
+                anchor = self._last_full_refresh_at or now
                 self._next_refresh_at = max(
                     now,
                     anchor + timedelta(seconds=interval),
                 )
+                deadline_reason = "regular"
                 cooldown_until = self._cooldown_deadline()
-                if cooldown_until and now < cooldown_until < self._next_refresh_at:
+                if cooldown_until and now < cooldown_until:
                     self._next_refresh_at = cooldown_until
+                    deadline_reason = "cooldown"
+                else:
+                    captcha_retry_at = self._captcha_retry_deadline()
+                    if captcha_retry_at and captcha_retry_at < self._next_refresh_at:
+                        self._next_refresh_at = max(now, captcha_retry_at)
+                        deadline_reason = "captcha"
                 deadline = self._next_refresh_at
             options_changed = False
             wake_only = False
@@ -798,7 +842,18 @@ class Addon:
                 return
             if wake_only:
                 continue
-            self.refresh()
+            if deadline_reason == "captcha" and not options_changed:
+                due_keys = self._due_captcha_retry_keys(datetime.now(UTC))
+                if due_keys:
+                    _LOGGER.info(
+                        "Retrying %s profile(s) after uncertain CAPTCHA recognition",
+                        len(due_keys),
+                    )
+                    self.refresh(profile_keys=due_keys)
+                else:
+                    continue
+            else:
+                self.refresh()
             if not options_changed:
                 options_fingerprint = self._options_fingerprint()
 
@@ -826,6 +881,26 @@ class Addon:
         """Return when another user-initiated query is safe to start."""
         attempted_at = self._state_datetime("last_attempt_at")
         return attempted_at + MANUAL_QUERY_GUARD if attempted_at else None
+
+    def _captcha_retry_deadline(self) -> datetime | None:
+        """Return the earliest pending per-profile CAPTCHA retry."""
+        deadlines = [
+            parsed
+            for value in self._state.get("people", {}).values()
+            if isinstance(value, dict)
+            if (parsed := _parse_datetime(value.get("captcha_retry_at"))) is not None
+        ]
+        return min(deadlines, default=None)
+
+    def _due_captcha_retry_keys(self, now: datetime) -> set[str]:
+        """Return profiles whose delayed CAPTCHA retry is due."""
+        return {
+            str(key)
+            for key, value in self._state.get("people", {}).items()
+            if isinstance(value, dict)
+            and (deadline := _parse_datetime(value.get("captcha_retry_at"))) is not None
+            and deadline <= now
+        }
 
     def _cooldown_deadline(self) -> datetime | None:
         """Return the persisted connectivity cooldown deadline, if valid."""
@@ -859,6 +934,7 @@ class Addon:
                     "cooldown_until": value.get("cooldown_until"),
                     "cooldown_error_type": value.get("cooldown_error_type"),
                     "last_attempt_at": value.get("last_attempt_at"),
+                    "last_full_attempt_at": value.get("last_full_attempt_at"),
                     "options_fingerprint": value.get("options_fingerprint"),
                     "people": {
                         str(key): _normalize_person_state(person_state)
@@ -927,9 +1003,7 @@ def _normalize_person_state(value: dict[str, Any]) -> dict[str, Any]:
             if not new_key:
                 continue
             try:
-                amount = (
-                    int(raw["amount"]) if raw.get("amount") is not None else None
-                )
+                amount = int(raw["amount"]) if raw.get("amount") is not None else None
             except (TypeError, ValueError):
                 amount = None
             item = {
@@ -944,6 +1018,21 @@ def _normalize_person_state(value: dict[str, Any]) -> dict[str, Any]:
             penalties_by_key[new_key] = item
     penalties = list(penalties_by_key.values())
     state["penalties"] = penalties
+    retry_at = _parse_datetime(state.get("captcha_retry_at"))
+    if retry_at:
+        state["captcha_retry_at"] = retry_at.isoformat()
+    else:
+        state.pop("captcha_retry_at", None)
+    for field in ("captcha_images", "captcha_submissions"):
+        try:
+            value = int(state[field])
+        except (KeyError, TypeError, ValueError):
+            state.pop(field, None)
+        else:
+            if value >= 0:
+                state[field] = value
+            else:
+                state.pop(field, None)
     seen = state.get("seen_keys")
     if not isinstance(seen, list):
         seen = []
@@ -961,9 +1050,25 @@ def _public_person_state(value: dict[str, Any]) -> dict[str, Any]:
             "error",
             "error_type",
             "failed_at",
+            "captcha_retry_at",
+            "captcha_images",
+            "captcha_submissions",
         )
         if key in value
     }
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    """Parse an optional persisted timestamp as an aware UTC datetime."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def classify_error(error: Exception) -> str:

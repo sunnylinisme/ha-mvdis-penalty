@@ -205,10 +205,12 @@ function render(data){
  const root=document.querySelector("#people");root.replaceChildren();
  const cooling=Boolean(data.cooldown_until);
  const guarded=Boolean(data.next_allowed_query_at);
+ const captchaRetry=Boolean(data.captcha_retry_at);
  document.querySelector("#refresh").disabled=data.refreshing||cooling||guarded||Boolean(data.configuration_error);
  document.querySelector("#notice").textContent=data.configuration_error?"設定尚未通過驗證":
   (data.refreshing?"正在查詢監理服務網…":cooling?
    "監理服務網目前無法連線，將於 "+time(data.cooldown_until)+" 自動重試":
+   captchaRetry?"驗證碼判讀未達可靠門檻，將於 "+time(data.captcha_retry_at)+" 自動補查":
    "最近更新："+time(data.last_refresh_at)+
    "　下次更新："+time(data.next_refresh_at)+
    (guarded?"　可再次立即查詢："+time(data.next_allowed_query_at):""));
@@ -228,7 +230,10 @@ function render(data){
   const total=penalties.reduce((sum,p)=>sum+(Number(p.amount)||0),0),metrics=el("div",undefined,"metrics");
   metrics.append(metric("未繳筆數",String(penalties.length)),metric("辨識金額","NT$ "+money(total)),
     metric("目前狀態",penalties.length?"有未繳紀錄":"查無資料"));card.append(metrics);
-  if(person.error){card.append(el("div",errorNames[person.error_type]||person.error,"error-box"))}
+  if(person.error){
+   const retry=person.captcha_retry_at?"，將於 "+time(person.captcha_retry_at)+" 自動補查":"";
+   card.append(el("div",(errorNames[person.error_type]||person.error)+retry,"error-box"))
+  }
   if(!penalties.length){card.append(el("div","目前沒有可顯示的罰單內容。","empty"))}
   else {
    const wrap=el("div",undefined,"table-wrap"),table=el("table"),body=el("tbody");

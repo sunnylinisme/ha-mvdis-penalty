@@ -8,7 +8,7 @@ from typing import Any
 import requests
 import server
 from mvdis import Penalty, QueryResult, legacy_penalty_key, parse_response, penalty_key
-from ocr import choose_candidate, ctc_decode
+from ocr import assess_candidates, choose_candidate, ctc_decode
 from server import (
     _NATIONAL_ID_CODES,
     Person,
@@ -262,6 +262,23 @@ def test_ocr_candidate_prefers_valid_length_then_confidence() -> None:
     assert choose_candidate([("ABC", 0.99), ("A8C2", 0.71), ("ABC2", 0.83)]) == "ABC2"
 
 
+def test_ocr_decision_requires_agreement_and_confidence() -> None:
+    reliable = assess_candidates(
+        [("AB12", 0.99), ("AB12", 0.98), ("AB12", 0.97), ("ABI2", 0.99)]
+    )
+    split = assess_candidates(
+        [("AB12", 0.99), ("AB12", 0.98), ("ABI2", 0.97), ("ABI2", 0.96)]
+    )
+    uncertain = assess_candidates(
+        [("AB12", 0.94), ("AB12", 0.94), ("AB12", 0.94), ("ABI2", 0.99)]
+    )
+
+    assert reliable.reliable is True
+    assert reliable.agreement == 3
+    assert split.reliable is False
+    assert uncertain.reliable is False
+
+
 def test_legacy_state_is_migrated_to_primary_profile(monkeypatch, tmp_path) -> None:
     state_path = tmp_path / "state.json"
     state_path.write_text(
@@ -303,6 +320,8 @@ def test_saved_penalty_keys_migrate_without_hiding_same_day_new_case(
                 "people": {
                     "primary": {
                         "checked_at": "2026-09-27T12:00:00+00:00",
+                        "captcha_retry_at": "not-a-time",
+                        "captcha_images": "not-a-number",
                         "penalties": [
                             {
                                 "key": old_key,
@@ -380,6 +399,8 @@ def test_valid_but_malformed_cached_penalty_is_sanitized(monkeypatch, tmp_path) 
     assert cached["amount"] is None
     assert cached["summary"] == "123"
     assert total_amount([cached]) == 0
+    assert "captcha_retry_at" not in addon._state["people"]["primary"]
+    assert "captcha_images" not in addon._state["people"]["primary"]
 
 
 def test_error_categories_are_stable() -> None:
@@ -551,6 +572,7 @@ def test_public_status_includes_refresh_schedule(monkeypatch, tmp_path) -> None:
     assert "每頁會自動更新狀態" not in DASHBOARD_HTML
     assert "監理服務網目前無法連線" in DASHBOARD_HTML
     assert "可再次立即查詢：" in DASHBOARD_HTML
+    assert "驗證碼判讀未達可靠門檻" in DASHBOARD_HTML
 
 
 def test_recent_identical_startup_does_not_query_again(monkeypatch, tmp_path) -> None:
@@ -659,6 +681,78 @@ def test_manual_refresh_sets_guard_and_wakes_scheduler(monkeypatch, tmp_path) ->
     assert addon._schedule_wake.is_set()
     assert addon.public_status()["next_allowed_query_at"] is not None
     assert addon.trigger_refresh() is False
+
+
+def test_captcha_failure_schedules_only_failed_profile_for_retry(
+    monkeypatch, tmp_path
+) -> None:
+    first_uid = _national_id("A")
+    second_uid = _national_id("B")
+    options_path = tmp_path / "options.json"
+    options_path.write_text(
+        json.dumps(
+            {
+                "primary_name": "本人",
+                "uid": first_uid,
+                "birthday": "0780702",
+                "additional_people": [
+                    {
+                        "name": "家人",
+                        "uid": second_uid,
+                        "birthday": "0800101",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(server, "STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(server, "OPTIONS_PATH", options_path)
+    monkeypatch.setattr(server, "PROFILE_QUERY_DELAY_SECONDS", 0)
+    addon = server.Addon()
+    monkeypatch.setattr(addon._publisher, "restore_profile", lambda *args: None)
+    monkeypatch.setattr(
+        addon._publisher,
+        "publish_result",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(addon._publisher, "publish_error", lambda *args: None)
+    attempts: list[str] = []
+
+    def query(uid, birthday, max_retries):
+        attempts.append(uid)
+        if uid == first_uid:
+            raise server.CaptchaError("uncertain")
+        return QueryResult((), server.datetime.now(server.UTC), 2, 1)
+
+    monkeypatch.setattr(addon._query, "query", query)
+    status = addon.refresh()
+
+    assert attempts == [first_uid, second_uid]
+    primary = status["people"][0]
+    secondary = status["people"][1]
+    assert primary["captcha_retry_at"] is not None
+    assert secondary.get("captcha_retry_at") is None
+    assert status["captcha_retry_at"] == primary["captcha_retry_at"]
+    retry_at = server.datetime.fromisoformat(primary["captcha_retry_at"])
+    assert addon._due_captcha_retry_keys(retry_at) == {"primary"}
+
+    attempts.clear()
+    full_anchor = addon._last_full_refresh_at
+    monkeypatch.setattr(
+        addon._query,
+        "query",
+        lambda uid, birthday, max_retries: (
+            attempts.append(uid)
+            or QueryResult((), server.datetime.now(server.UTC), 1, 1)
+        ),
+    )
+    addon.refresh(profile_keys={"primary"})
+
+    assert attempts == [first_uid]
+    assert addon._last_full_refresh_at == full_anchor
+    assert addon.public_status()["captcha_retry_at"] is None
 
 
 def test_query_state_is_saved_before_home_assistant_notification(
@@ -818,10 +912,9 @@ def test_saved_options_are_automatically_validated_and_queried(
     monkeypatch.setattr(
         addon,
         "refresh",
-        lambda **kwargs: refreshes.append(
-            options_path.read_text(encoding="utf-8")
-        )
-        or {},
+        lambda **kwargs: (
+            refreshes.append(options_path.read_text(encoding="utf-8")) or {}
+        ),
     )
 
     worker = threading.Thread(target=addon.run)
