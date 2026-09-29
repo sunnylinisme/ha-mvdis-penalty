@@ -117,6 +117,10 @@ ruff check mvdis_penalty_backend/app tests
 python -m compileall mvdis_penalty_backend/app
 ```
 
+## 開發協助
+
+本專案部分程式碼與文件由 OpenAI Codex 協助開發及檢查，最終維護與發佈由專案作者負責。
+
 ## 授權
 
 MIT
