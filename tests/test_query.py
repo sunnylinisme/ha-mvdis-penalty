@@ -83,13 +83,7 @@ def test_one_attempt_uses_one_page_captcha_and_post(monkeypatch) -> None:
     assert [(method, url) for method, url, _ in session.calls] == [
         ("GET", QUERY_URL),
         ("GET", CAPTCHA_URL),
-        with pytest.raises(
-        CaptchaError,
-        match=(
-            r"10 image\(s\) and 0 submission\(s\); "
-            r"best OCR agreement 1/4, confidence 0\.900"
-        ),
-    ):
+        ("POST", POST_URL),
     ]
     post_data = session.calls[-1][2]["data"]
     assert post_data["validateStr"] == "AB12"
@@ -116,7 +110,13 @@ def test_low_confidence_images_are_replaced_without_posting(monkeypatch) -> None
         *[_decision("ABC", reliable=False, agreement=1) for _ in range(10)],
     )
 
-    with pytest.raises(CaptchaError, match=r"10 image\(s\) and 0 submission"):
+    with pytest.raises(
+        CaptchaError,
+        match=(
+            r"10 image\(s\) and 0 submission\(s\); "
+            r"best OCR agreement 1/4, confidence 0\.900"
+        ),
+    ):
         query.query("A123456789", "0780702", max_retries=1)
 
     page_gets = sum(
