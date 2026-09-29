@@ -83,7 +83,13 @@ def test_one_attempt_uses_one_page_captcha_and_post(monkeypatch) -> None:
     assert [(method, url) for method, url, _ in session.calls] == [
         ("GET", QUERY_URL),
         ("GET", CAPTCHA_URL),
-        ("POST", POST_URL),
+        with pytest.raises(
+        CaptchaError,
+        match=(
+            r"10 image\(s\) and 0 submission\(s\); "
+            r"best OCR agreement 1/4, confidence 0\.900"
+        ),
+    ):
     ]
     post_data = session.calls[-1][2]["data"]
     assert post_data["validateStr"] == "AB12"
