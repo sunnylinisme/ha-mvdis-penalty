@@ -156,41 +156,110 @@ DASHBOARD_HTML = """<!doctype html>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>監理站罰單通知</title>
   <style>
-    :root { color-scheme: light dark; --bg:#f4f6f8; --card:#fff; --text:#17202a;
-      --muted:#657786; --line:#d9e0e6; --accent:#1675d1; --ok:#198754;
-      --warn:#c77700; --bad:#c62828; }
-    @media (prefers-color-scheme:dark) { :root { --bg:#101315; --card:#1b1f22;
-      --text:#edf2f5; --muted:#a8b3bb; --line:#333b40; --accent:#63aef2; } }
-    * { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--text);
-      font:15px/1.5 system-ui,-apple-system,"Noto Sans TC",sans-serif }
-    main { max-width:1100px; margin:auto; padding:24px }
-    header { display:flex; align-items:center; justify-content:space-between; gap:16px;
-      margin-bottom:20px } h1 { font-size:24px; margin:0 } .actions { display:flex; gap:8px }
-    button { border:0; border-radius:10px; padding:10px 15px; font-weight:650;
-      cursor:pointer; background:var(--accent); color:white } button.secondary {
-      background:transparent; color:var(--accent); border:1px solid var(--accent) }
-    button:disabled { opacity:.5; cursor:wait } #notice { min-height:24px; color:var(--muted) }
-    .grid { display:grid; gap:16px } .card { background:var(--card); border:1px solid var(--line);
-      border-radius:14px; padding:18px; box-shadow:0 2px 8px #0000000d }
-    .card-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px }
-    h2 { margin:0; font-size:20px } .badge { border-radius:999px; padding:4px 9px;
-      font-size:12px; font-weight:700; background:#6b728020 } .ok { color:var(--ok) }
-    .error { color:var(--bad) } .waiting { color:var(--warn) }
-    .metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px;
-      margin:16px 0 } .metric { padding:12px; border-radius:10px; background:var(--bg) }
-    .metric strong { display:block; font-size:22px } .metric span,.muted { color:var(--muted) }
-    table { width:100%; border-collapse:collapse; margin-top:12px; font-size:14px }
-    th,td { text-align:left; padding:9px 7px; border-bottom:1px solid var(--line);
-      vertical-align:top } th { color:var(--muted) } .empty { padding:18px 0; color:var(--muted) }
-    .error-box { margin-top:12px; padding:10px; border-radius:8px; background:#c6282815 }
-    @media(max-width:650px) { main{padding:15px} header{align-items:flex-start;flex-direction:column}
-      .metrics{grid-template-columns:1fr} .table-wrap{overflow:auto} }
+    :root { color-scheme:light dark; --bg:#f3f6f9; --surface:#fff; --surface-2:#f7f9fb;
+      --text:#17212b; --muted:#687887; --line:#dbe3ea; --accent:#0876ce;
+      --accent-soft:#0876ce16; --ok:#16834f; --ok-soft:#16834f16;
+      --warn:#b66b00; --warn-soft:#b66b0018; --bad:#c93636; --bad-soft:#c9363615;
+      --shadow:0 10px 30px #17324d0d; }
+    @media(prefers-color-scheme:dark){:root{--bg:#0e1317;--surface:#181e22;--surface-2:#101518;
+      --text:#f0f4f7;--muted:#9cabb5;--line:#303a40;--accent:#63b2f4;
+      --accent-soft:#63b2f418;--ok:#59cb8b;--warn:#f0ac4d;--bad:#ff7777;
+      --shadow:0 14px 34px #0004}}
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);
+      font:15px/1.5 system-ui,-apple-system,"Noto Sans TC",sans-serif}
+    button,input,select{font:inherit} main{max-width:1280px;margin:auto;padding:28px}
+    .hero{position:relative;overflow:hidden;display:flex;justify-content:space-between;gap:24px;
+      padding:26px 28px;border:1px solid var(--line);border-radius:22px;background:var(--surface);
+      box-shadow:var(--shadow)} .hero:after{content:"";position:absolute;right:-70px;top:-110px;
+      width:260px;height:260px;border-radius:50%;background:var(--accent-soft);pointer-events:none}
+    .eyebrow{margin-bottom:6px;color:var(--accent);font-size:12px;font-weight:800;
+      letter-spacing:.12em} h1{margin:0;font-size:clamp(25px,4vw,34px);line-height:1.2}
+    #notice{min-height:23px;margin-top:9px;color:var(--muted)} .actions{z-index:1;align-self:center}
+    button{border:0;border-radius:12px;padding:11px 17px;background:var(--accent);color:#fff;
+      font-weight:750;white-space:nowrap;cursor:pointer;box-shadow:0 5px 16px var(--accent-soft)}
+    button:hover{filter:brightness(1.06)} button:disabled{opacity:.5;cursor:wait;filter:none}
+    button.secondary{padding:8px 12px;border:1px solid var(--line);background:transparent;
+      color:var(--accent);box-shadow:none}
+    .overview{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:18px 0}
+    .summary-card{min-height:104px;padding:18px;border:1px solid var(--line);border-radius:16px;
+      background:var(--surface);box-shadow:var(--shadow)} .summary-card strong{display:block;
+      margin-top:5px;font-size:27px;line-height:1.1} .summary-card span{color:var(--muted)}
+    .summary-card.attention strong{color:var(--bad)}
+    .schedule{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;overflow:hidden;
+      margin-bottom:18px;border:1px solid var(--line);border-radius:16px;background:var(--line)}
+    .schedule-item{padding:13px 16px;background:var(--surface)} .schedule-item span{display:block;
+      color:var(--muted);font-size:12px}.schedule-item strong{display:block;margin-top:2px;font-size:14px}
+    .toolbar{display:flex;align-items:center;gap:10px;margin:24px 0 14px}.toolbar h2{margin:0 auto 0 0;
+      font-size:20px}.control{height:42px;border:1px solid var(--line);border-radius:12px;
+      background:var(--surface);color:var(--text);outline:none}.control:focus{border-color:var(--accent);
+      box-shadow:0 0 0 3px var(--accent-soft)} input.control{width:min(280px,100%);padding:0 13px}
+    select.control{padding:0 34px 0 12px}.result-count{min-width:84px;color:var(--muted);text-align:right}
+    .people-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+    .person-card{display:flex;min-width:0;flex-direction:column;padding:20px;border:1px solid var(--line);
+      border-radius:18px;background:var(--surface);box-shadow:var(--shadow)}
+    .person-head{display:flex;align-items:flex-start;gap:12px}.avatar{display:grid;flex:0 0 42px;
+      width:42px;height:42px;place-items:center;border-radius:13px;background:var(--accent-soft);
+      color:var(--accent);font-size:18px;font-weight:850}.person-title{min-width:0;flex:1}
+    .person-title h3{overflow:hidden;margin:0;text-overflow:ellipsis;white-space:nowrap;font-size:20px}
+    .muted{color:var(--muted)}.checked{font-size:13px}.badge{flex:0 0 auto;border-radius:999px;
+      padding:5px 9px;background:var(--surface-2);font-size:12px;font-weight:800}
+    .badge.ok{color:var(--ok);background:var(--ok-soft)}.badge.unpaid{color:var(--warn);background:var(--warn-soft)}
+    .badge.error{color:var(--bad);background:var(--bad-soft)}.badge.waiting{color:var(--warn);background:var(--warn-soft)}
+    .metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:17px 0}
+    .metric{min-width:0;padding:12px;border-radius:12px;background:var(--surface-2)}
+    .metric strong{display:block;overflow:hidden;font-size:20px;text-overflow:ellipsis;white-space:nowrap}
+    .metric span{color:var(--muted);font-size:12px}.error-box{margin-bottom:14px;padding:11px 12px;
+      border-radius:10px;background:var(--bad-soft);color:var(--bad)}
+    .penalty-list{display:grid;gap:8px;margin-bottom:16px} details{overflow:hidden;border:1px solid var(--line);
+      border-radius:12px;background:var(--surface-2)} summary{display:flex;align-items:center;gap:8px;
+      padding:11px 13px;cursor:pointer;font-weight:750;list-style:none} summary::-webkit-details-marker{display:none}
+    summary:after{content:"＋";margin-left:auto;color:var(--accent)}details[open] summary:after{content:"−"}
+    .penalty-amount{color:var(--warn);font-weight:800}.detail-grid{display:grid;
+      grid-template-columns:minmax(110px,.8fr) minmax(0,2fr);border-top:1px solid var(--line)}
+    .detail-grid dt,.detail-grid dd{margin:0;padding:9px 12px;border-bottom:1px solid var(--line)}
+    .detail-grid dt{color:var(--muted)}.detail-grid dd{overflow-wrap:anywhere}
+    .detail-grid dt:last-of-type,.detail-grid dd:last-of-type{border-bottom:0}
+    .empty{display:grid;min-height:82px;place-items:center;margin-bottom:14px;padding:16px;
+      border:1px dashed var(--line);border-radius:12px;color:var(--muted);text-align:center}
+    .card-footer{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:auto;
+      padding-top:4px}.card-footer span{color:var(--muted);font-size:12px}
+    .full-width{grid-column:1/-1}.no-results{grid-column:1/-1;padding:48px 20px;border:1px dashed var(--line);
+      border-radius:16px;color:var(--muted);text-align:center}
+    @media(max-width:850px){main{padding:18px}.overview{grid-template-columns:repeat(2,minmax(0,1fr))}
+      .people-grid{grid-template-columns:1fr}.toolbar{flex-wrap:wrap}.toolbar h2{width:100%}
+      .result-count{margin-left:auto}}
+    @media(max-width:650px){.schedule{grid-template-columns:1fr}.schedule-item{display:flex;
+      align-items:center;justify-content:space-between;gap:14px}.schedule-item strong{text-align:right}}
+    @media(max-width:560px){main{padding:12px}.hero{align-items:flex-start;padding:20px;flex-direction:column}
+      .actions,.actions button{width:100%}.overview{gap:8px}.summary-card{min-height:88px;padding:14px}
+      .summary-card strong{font-size:23px}.schedule{grid-template-columns:1fr}.toolbar{gap:8px}
+      input.control{width:100%}select.control{flex:1}.person-card{padding:16px}.metrics{grid-template-columns:1fr 1fr}
+      .metric:last-child{grid-column:1/-1}.detail-grid{grid-template-columns:1fr}.detail-grid dt{padding-bottom:2px;
+      border-bottom:0}.detail-grid dd{padding-top:2px}.badge{max-width:110px;text-align:center}}
   </style>
 </head>
 <body><main>
-  <header><div><h1>監理站罰單通知</h1><div id="notice">載入中…</div></div>
-    <div class="actions"><button id="refresh">立即查詢</button></div></header>
-  <section id="people" class="grid"></section>
+  <header class="hero">
+    <div><div class="eyebrow">TAIWAN MVDIS</div><h1>監理站罰單通知</h1>
+      <div id="notice" aria-live="polite">載入中…</div></div>
+    <div class="actions"><button id="refresh">立即查詢</button></div>
+  </header>
+  <section id="overview" class="overview" aria-label="多人總覽"></section>
+  <section class="schedule" aria-label="查詢排程">
+    <div class="schedule-item"><span>最近更新</span><strong id="last-refresh">尚未查詢</strong></div>
+    <div class="schedule-item"><span>下次更新</span><strong id="next-refresh">尚未排程</strong></div>
+    <div class="schedule-item"><span>查詢限制</span><strong id="query-guard">可立即查詢</strong></div>
+  </section>
+  <section class="toolbar" aria-label="查詢人篩選">
+    <h2>查詢人</h2>
+    <input id="search" class="control" type="search" placeholder="搜尋姓名" aria-label="搜尋查詢人姓名">
+    <select id="status-filter" class="control" aria-label="依狀態篩選">
+      <option value="all">全部狀態</option><option value="unpaid">有未繳紀錄</option>
+      <option value="clear">查無資料</option><option value="error">需要注意</option>
+    </select>
+    <span id="result-count" class="result-count">顯示 0 / 0 人</span>
+  </section>
+  <section id="people" class="people-grid"></section>
 </main>
 <script>
 const errorNames={waiting:"等待第一次查詢",captcha:"驗證碼辨識失敗",identity:"身分資料遭拒",
@@ -198,63 +267,74 @@ const errorNames={waiting:"等待第一次查詢",captcha:"驗證碼辨識失敗
  http:"監理站服務錯誤",unknown:"未知錯誤"};
 const money=v=>new Intl.NumberFormat("zh-TW").format(v||0);
 const time=v=>v?new Date(v).toLocaleString("zh-TW",{hour12:false}):"尚未查詢";
-function el(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;
- if(cls)n.className=cls;return n}
+const el=(tag,text,cls)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=text;
+ if(cls)node.className=cls;return node};
+let latestData=null;const openPenalties=new Set();
+function penaltiesOf(person){return Array.isArray(person.penalties)?person.penalties:[]}
+function category(person){if(person.error)return "error";return penaltiesOf(person).length?"unpaid":"clear"}
 function metric(label,value){const box=el("div",undefined,"metric");box.append(el("strong",value),el("span",label));return box}
-function render(data){
- const root=document.querySelector("#people");root.replaceChildren();
- const cooling=Boolean(data.cooldown_until);
- const guarded=Boolean(data.next_allowed_query_at);
- const captchaRetry=Boolean(data.captcha_retry_at);
- document.querySelector("#refresh").disabled=data.refreshing||cooling||guarded||Boolean(data.configuration_error);
- document.querySelector("#notice").textContent=data.configuration_error?"設定尚未通過驗證":
-  (data.refreshing?"正在查詢監理服務網…":cooling?
-   "監理服務網目前無法連線，將於 "+time(data.cooldown_until)+" 自動重試":
-   captchaRetry?"驗證碼判讀未達可靠門檻，將於 "+time(data.captcha_retry_at)+" 自動補查":
-   "最近更新："+time(data.last_refresh_at)+
-   "　下次更新："+time(data.next_refresh_at)+
-   (guarded?"　可再次立即查詢："+time(data.next_allowed_query_at):""));
- if(data.configuration_error){
-  const card=el("article",undefined,"card");
+function summaryCard(label,value,attention=false){const card=el("div",undefined,"summary-card"+(attention?" attention":""));
+ card.append(el("span",label),el("strong",value));return card}
+function renderOverview(data){const root=document.querySelector("#overview"),people=data.people||[];
+ const penalties=people.flatMap(p=>penaltiesOf(p));const total=penalties.reduce((sum,p)=>sum+(Number(p.amount)||0),0);
+ const attention=people.filter(p=>p.error).length;root.replaceChildren(summaryCard("查詢人",String(people.length)),
+  summaryCard("未繳筆數",String(penalties.length),penalties.length>0),summaryCard("辨識總金額","NT$ "+money(total)),
+  summaryCard("需要注意",String(attention),attention>0))}
+function renderSchedule(data){document.querySelector("#last-refresh").textContent=time(data.last_refresh_at);
+ document.querySelector("#next-refresh").textContent=data.next_refresh_at?time(data.next_refresh_at):"尚未排程";
+ const guard=data.cooldown_until?"冷卻至 "+time(data.cooldown_until):data.captcha_retry_at?
+  "補查於 "+time(data.captcha_retry_at):data.next_allowed_query_at?
+  "可再次立即查詢："+time(data.next_allowed_query_at):"可立即查詢";
+ document.querySelector("#query-guard").textContent=guard}
+function penaltyDetails(penalty,index,profileKey){const item=document.createElement("details"),heading=document.createElement("summary"),
+ token=profileKey+":"+(penalty.key||index);item.open=openPenalties.has(token);
+ item.addEventListener("toggle",()=>item.open?openPenalties.add(token):openPenalties.delete(token));
+ heading.append(el("span","第 "+(index+1)+" 筆｜"+(penalty.summary||"交通違規罰單")));
+ if(Number(penalty.amount))heading.append(el("span","NT$ "+money(Number(penalty.amount)),"penalty-amount"));
+ item.append(heading);const list=el("dl",undefined,"detail-grid"),entries=Object.entries(penalty.details||{});
+ if(!entries.length)entries.push(["內容",penalty.summary||"交通違規罰單"]);
+ for(const [key,value] of entries)list.append(el("dt",key),el("dd",String(value)));item.append(list);return item}
+function personCard(person,index){const penalties=penaltiesOf(person),card=el("article",undefined,"person-card");
+ const head=el("div",undefined,"person-head"),avatar=el("div",(person.name||"?").trim().slice(0,1)||"?","avatar");
+ const title=el("div",undefined,"person-title");title.append(el("h3",person.name),el("div","最後查詢："+time(person.checked_at),"muted checked"));
+ const kind=category(person),status=person.error?(errorNames[person.error_type]||"查詢錯誤"):
+  (penalties.length?"有未繳紀錄":"查詢成功");head.append(avatar,title,el("span",status,"badge "+(person.error?
+  (person.error_type==="waiting"?"waiting":"error"):kind)));card.append(head);
+ const total=penalties.reduce((sum,p)=>sum+(Number(p.amount)||0),0),metrics=el("div",undefined,"metrics");
+ metrics.append(metric("未繳筆數",String(penalties.length)),metric("辨識金額","NT$ "+money(total)),
+  metric("目前狀態",person.error?"需要注意":penalties.length?"有紀錄":"查無資料"));card.append(metrics);
+ if(person.error){const retry=person.captcha_retry_at?"，將於 "+time(person.captcha_retry_at)+" 自動補查":"";
+  card.append(el("div",(errorNames[person.error_type]||person.error)+retry,"error-box"))}
+ if(penalties.length){const list=el("div",undefined,"penalty-list");penalties.forEach((p,i)=>list.append(penaltyDetails(p,i,person.key)));card.append(list)}
+ else card.append(el("div",person.error?"保留上次成功資料；目前沒有可顯示的罰單內容。":"目前沒有可顯示的罰單內容。","empty"));
+ const footer=el("div",undefined,"card-footer"),position=el("span","第 "+(index+1)+" 位查詢人");
+ const test=el("button","傳送測試通知","secondary");test.addEventListener("click",()=>testNotification(person.key,test));
+ footer.append(position,test);card.append(footer);return card}
+function renderPeople(data){const root=document.querySelector("#people"),query=document.querySelector("#search").value.trim().toLocaleLowerCase("zh-TW"),
+ filter=document.querySelector("#status-filter").value,people=data.people||[];const shown=people.filter(person=>
+  (!query||person.name.toLocaleLowerCase("zh-TW").includes(query))&&(filter==="all"||category(person)===filter));
+ root.replaceChildren();document.querySelector("#result-count").textContent="顯示 "+shown.length+" / "+people.length+" 人";
+ if(!shown.length){root.append(el("div",people.length?"找不到符合條件的查詢人。":"尚未設定查詢人。","no-results"));return}
+ shown.forEach(person=>root.append(personCard(person,people.indexOf(person))))}
+function render(data){latestData=data;const cooling=Boolean(data.cooldown_until),guarded=Boolean(data.next_allowed_query_at),
+ captchaRetry=Boolean(data.captcha_retry_at);document.querySelector("#refresh").disabled=data.refreshing||cooling||guarded||Boolean(data.configuration_error);
+ document.querySelector("#notice").textContent=data.configuration_error?"設定尚未通過驗證":data.refreshing?"正在查詢監理服務網…":
+  cooling?"監理服務網目前無法連線，將於 "+time(data.cooldown_until)+" 自動重試":
+  captchaRetry?"驗證碼判讀未達可靠門檻，將於 "+time(data.captcha_retry_at)+" 自動補查":
+  "最近更新："+time(data.last_refresh_at)+"　下次更新："+time(data.next_refresh_at);
+ renderOverview(data);renderSchedule(data);const root=document.querySelector("#people");
+ if(data.configuration_error){root.replaceChildren();const card=el("article",undefined,"person-card full-width");
   card.append(el("h2","請修正查詢人設定"),el("div",data.configuration_error,"error-box"),
    el("div","請到 Add-on 的「設定」修正後按儲存；系統會在約 5 秒內自動驗證並查詢，不必重新啟動。","empty"));
-  root.append(card);return
- }
- for(const person of data.people){
-  const card=el("article",undefined,"card"),head=el("div",undefined,"card-head"),title=el("div");
-  title.append(el("h2",person.name),el("div","最後查詢："+time(person.checked_at),"muted"));
-  const status=person.error?errorNames[person.error_type]||"查詢錯誤":"查詢成功";
-  head.append(title,el("span",status,"badge "+(person.error?(person.error_type==="waiting"?"waiting":"error"):"ok")));
-  card.append(head);
-  const penalties=Array.isArray(person.penalties)?person.penalties:[];
-  const total=penalties.reduce((sum,p)=>sum+(Number(p.amount)||0),0),metrics=el("div",undefined,"metrics");
-  metrics.append(metric("未繳筆數",String(penalties.length)),metric("辨識金額","NT$ "+money(total)),
-    metric("目前狀態",penalties.length?"有未繳紀錄":"查無資料"));card.append(metrics);
-  if(person.error){
-   const retry=person.captcha_retry_at?"，將於 "+time(person.captcha_retry_at)+" 自動補查":"";
-   card.append(el("div",(errorNames[person.error_type]||person.error)+retry,"error-box"))
-  }
-  if(!penalties.length){card.append(el("div","目前沒有可顯示的罰單內容。","empty"))}
-  else {
-   const wrap=el("div",undefined,"table-wrap"),table=el("table"),body=el("tbody");
-   for(const [index,penalty] of penalties.entries()){
-    const heading=el("tr"),headingCell=el("th","第 "+(index+1)+" 筆");headingCell.colSpan=2;
-    heading.append(headingCell);body.append(heading);
-    const details=Object.entries(penalty.details||{});
-    if(!details.length)details.push(["內容",penalty.summary||"交通違規罰單"]);
-    for(const [key,value] of details){
-    const row=el("tr");row.append(el("th",key),el("td",String(value)));body.append(row)}
-    const gap=el("tr");const cell=el("td","");cell.colSpan=2;gap.append(cell);body.append(gap)}
-   table.append(body);wrap.append(table);card.append(wrap)
-  }
-  const test=el("button","傳送測試通知","secondary");test.addEventListener("click",()=>testNotification(person.key,test));card.append(test);root.append(card)
- }
-}
+  root.append(card);document.querySelector("#result-count").textContent="顯示 0 / 0 人";return}renderPeople(data)}
 async function api(path,options={}){const response=await fetch(path,{cache:"no-store",...options});
  if(!response.ok&&response.status!==409)throw new Error(String(response.status));return response.json()}
 async function load(){try{render(await api("api/status"))}catch{document.querySelector("#notice").textContent="無法載入狀態"}}
+document.querySelector("#search").addEventListener("input",()=>latestData&&renderPeople(latestData));
+document.querySelector("#status-filter").addEventListener("change",()=>latestData&&renderPeople(latestData));
 document.querySelector("#refresh").addEventListener("click",async event=>{event.currentTarget.disabled=true;
- try{await api("api/refresh",{method:"POST",headers:{"X-Requested-With":"XMLHttpRequest"}});await load()}catch{document.querySelector("#notice").textContent="無法啟動查詢"}});
+ try{await api("api/refresh",{method:"POST",headers:{"X-Requested-With":"XMLHttpRequest"}});await load()}
+ catch{document.querySelector("#notice").textContent="無法啟動查詢"}});
 async function testNotification(key,button){button.disabled=true;try{await api("api/test-notification",{method:"POST",
  headers:{"Content-Type":"application/json","X-Requested-With":"XMLHttpRequest"},body:JSON.stringify({profile_key:key})});
  button.textContent="已傳送"}catch{button.textContent="傳送失敗"}finally{setTimeout(()=>{button.disabled=false;button.textContent="傳送測試通知"},1800)}}
