@@ -16,10 +16,8 @@ from typing import Any
 ASSET_DIR = Path(os.environ.get("OCR_ASSET_DIR", "/app/ocr_assets"))
 MODEL_PATH = ASSET_DIR / "common_old.onnx"
 CHARSET_PATH = ASSET_DIR / "charset.json"
-OCR_MIN_AGREEMENT = 3
-# A strict threshold is practical because uncertain images can be replaced
-# without submitting the identity form. Five-image batches keep availability.
-OCR_MIN_CONFIDENCE = 0.95
+OCR_UNANIMOUS_MIN_CONFIDENCE = 0.90
+OCR_MAJORITY_MIN_CONFIDENCE = 0.95
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,10 +71,10 @@ def assess_candidates(candidates: Iterable[tuple[str, float]]) -> OcrDecision:
     matching_confidence = [confidence for text, confidence in pool if text == code]
     confidence = sum(matching_confidence) / len(matching_confidence)
     agreement = votes[code]
-    reliable = (
-        len(code) == 4
-        and agreement >= OCR_MIN_AGREEMENT
-        and confidence >= OCR_MIN_CONFIDENCE
+    unanimous = agreement == len(normalized)
+    reliable = len(code) == 4 and (
+        (unanimous and confidence >= OCR_UNANIMOUS_MIN_CONFIDENCE)
+        or (agreement >= 3 and confidence >= OCR_MAJORITY_MIN_CONFIDENCE)
     )
     return OcrDecision(code, confidence, agreement, len(normalized), reliable)
 
