@@ -600,6 +600,11 @@ def test_public_status_includes_refresh_schedule(monkeypatch, tmp_path) -> None:
     assert "可再次立即查詢：" in DASHBOARD_HTML
     assert "驗證碼判讀未達可靠門檻" in DASHBOARD_HTML
     assert 'aria-label="多人總覽"' in DASHBOARD_HTML
+    assert 'overviewGroup("查詢人"' in DASHBOARD_HTML
+    assert 'overviewGroup("需要注意"' in DASHBOARD_HTML
+    assert 'profileChip(person,index,true)' in DASHBOARD_HTML
+    assert 'card.scrollIntoView({behavior:"smooth"' in DASHBOARD_HTML
+    assert 'summaryCard(' not in DASHBOARD_HTML
     assert 'id="search"' in DASHBOARD_HTML
     assert 'id="status-filter"' in DASHBOARD_HTML
     assert 'class="people-grid"' in DASHBOARD_HTML

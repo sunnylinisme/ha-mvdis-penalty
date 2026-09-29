@@ -180,11 +180,15 @@ DASHBOARD_HTML = """<!doctype html>
     button:hover{filter:brightness(1.06)} button:disabled{opacity:.5;cursor:wait;filter:none}
     button.secondary{padding:8px 12px;border:1px solid var(--line);background:transparent;
       color:var(--accent);box-shadow:none}
-    .overview{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:18px 0}
-    .summary-card{min-height:104px;padding:18px;border:1px solid var(--line);border-radius:16px;
-      background:var(--surface);box-shadow:var(--shadow)} .summary-card strong{display:block;
-      margin-top:5px;font-size:27px;line-height:1.1} .summary-card span{color:var(--muted)}
-    .summary-card.attention strong{color:var(--bad)}
+    .overview{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:18px 0}
+    .overview-group{min-height:96px;padding:16px 18px;border:1px solid var(--line);border-radius:16px;
+      background:var(--surface);box-shadow:var(--shadow)}.overview-label{display:block;margin-bottom:10px;
+      color:var(--muted);font-size:13px}.profile-chips{display:flex;flex-wrap:wrap;gap:8px}
+    button.profile-chip{padding:7px 11px;border:1px solid var(--line);border-radius:999px;
+      background:var(--surface-2);color:var(--text);font-size:13px;box-shadow:none}
+    button.profile-chip:hover{border-color:var(--accent);color:var(--accent);filter:none}
+    button.profile-chip.attention{border-color:var(--bad);background:var(--bad-soft);color:var(--bad)}
+    .profile-chip.empty{padding:7px 0;color:var(--muted);font-size:13px}
     .schedule{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;overflow:hidden;
       margin-bottom:18px;border:1px solid var(--line);border-radius:16px;background:var(--line)}
     .schedule-item{padding:13px 16px;background:var(--surface)} .schedule-item span{display:block;
@@ -197,6 +201,8 @@ DASHBOARD_HTML = """<!doctype html>
     .people-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
     .person-card{display:flex;min-width:0;flex-direction:column;padding:20px;border:1px solid var(--line);
       border-radius:18px;background:var(--surface);box-shadow:var(--shadow)}
+    .person-card:focus{outline:2px solid var(--accent);outline-offset:3px}.person-card.highlight{
+      box-shadow:0 0 0 3px var(--accent-soft),var(--shadow)}
     .person-head{display:flex;align-items:flex-start;gap:12px}.avatar{display:grid;flex:0 0 42px;
       width:42px;height:42px;place-items:center;border-radius:13px;background:var(--accent-soft);
       color:var(--accent);font-size:18px;font-weight:850}.person-title{min-width:0;flex:1}
@@ -231,8 +237,8 @@ DASHBOARD_HTML = """<!doctype html>
     @media(max-width:650px){.schedule{grid-template-columns:1fr}.schedule-item{display:flex;
       align-items:center;justify-content:space-between;gap:14px}.schedule-item strong{text-align:right}}
     @media(max-width:560px){main{padding:12px}.hero{align-items:flex-start;padding:20px;flex-direction:column}
-      .actions,.actions button{width:100%}.overview{gap:8px}.summary-card{min-height:88px;padding:14px}
-      .summary-card strong{font-size:23px}.schedule{grid-template-columns:1fr}.toolbar{gap:8px}
+      .actions,.actions button{width:100%}.overview{gap:8px;grid-template-columns:1fr}
+      .schedule{grid-template-columns:1fr}.toolbar{gap:8px}
       input.control{width:100%}select.control{flex:1}.person-card{padding:16px}.metrics{grid-template-columns:1fr 1fr}
       .metric:last-child{grid-column:1/-1}.detail-grid{grid-template-columns:1fr}.detail-grid dt{padding-bottom:2px;
       border-bottom:0}.detail-grid dd{padding-top:2px}.badge{max-width:110px;text-align:center}}
@@ -273,13 +279,20 @@ let latestData=null;const openPenalties=new Set();
 function penaltiesOf(person){return Array.isArray(person.penalties)?person.penalties:[]}
 function category(person){if(person.error)return "error";return penaltiesOf(person).length?"unpaid":"clear"}
 function metric(label,value){const box=el("div",undefined,"metric");box.append(el("strong",value),el("span",label));return box}
-function summaryCard(label,value,attention=false){const card=el("div",undefined,"summary-card"+(attention?" attention":""));
- card.append(el("span",label),el("strong",value));return card}
+function jumpToPerson(index){if(!latestData)return;document.querySelector("#search").value="";
+ document.querySelector("#status-filter").value="all";renderPeople(latestData);requestAnimationFrame(()=>{
+  const card=document.querySelector("#person-"+(index+1));if(!card)return;card.focus({preventScroll:true});
+  card.scrollIntoView({behavior:"smooth",block:"start"});card.classList.add("highlight");
+  setTimeout(()=>card.classList.remove("highlight"),1600)})}
+function profileChip(person,index,attention=false){const chip=el("button",person.name,"profile-chip"+(attention?" attention":""));
+ chip.type="button";chip.addEventListener("click",()=>jumpToPerson(index));return chip}
+function overviewGroup(label,chips,emptyText){const group=el("div",undefined,"overview-group"),list=el("div",undefined,"profile-chips");
+ group.append(el("span",label,"overview-label"));if(chips.length)list.append(...chips);
+ else list.append(el("span",emptyText,"profile-chip empty"));group.append(list);return group}
 function renderOverview(data){const root=document.querySelector("#overview"),people=data.people||[];
- const penalties=people.flatMap(p=>penaltiesOf(p));const total=penalties.reduce((sum,p)=>sum+(Number(p.amount)||0),0);
- const attention=people.filter(p=>p.error).length;root.replaceChildren(summaryCard("查詢人",String(people.length)),
-  summaryCard("未繳筆數",String(penalties.length),penalties.length>0),summaryCard("辨識總金額","NT$ "+money(total)),
-  summaryCard("需要注意",String(attention),attention>0))}
+ const all=people.map((person,index)=>profileChip(person,index));const attention=people.flatMap((person,index)=>
+  person.error?[profileChip(person,index,true)]:[]);root.replaceChildren(overviewGroup("查詢人",all,"尚未設定"),
+  overviewGroup("需要注意",attention,"目前無"))}
 function renderSchedule(data){document.querySelector("#last-refresh").textContent=time(data.last_refresh_at);
  document.querySelector("#next-refresh").textContent=data.next_refresh_at?time(data.next_refresh_at):"尚未排程";
  const guard=data.cooldown_until?"冷卻至 "+time(data.cooldown_until):data.captcha_retry_at?
@@ -295,6 +308,7 @@ function penaltyDetails(penalty,index,profileKey){const item=document.createElem
  if(!entries.length)entries.push(["內容",penalty.summary||"交通違規罰單"]);
  for(const [key,value] of entries)list.append(el("dt",key),el("dd",String(value)));item.append(list);return item}
 function personCard(person,index){const penalties=penaltiesOf(person),card=el("article",undefined,"person-card");
+ card.id="person-"+(index+1);card.tabIndex=-1;
  const head=el("div",undefined,"person-head"),avatar=el("div",(person.name||"?").trim().slice(0,1)||"?","avatar");
  const title=el("div",undefined,"person-title");title.append(el("h3",person.name),el("div","最後查詢："+time(person.checked_at),"muted checked"));
  const kind=category(person),status=person.error?(errorNames[person.error_type]||"查詢錯誤"):
