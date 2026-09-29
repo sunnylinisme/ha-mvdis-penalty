@@ -25,5 +25,5 @@ configuration:
     name: Query interval
     description: Hours between government-site queries; minimum 6.
   max_retries:
-    name: CAPTCHA attempts
-    description: Maximum local OCR attempts for each scheduled query.
+    name: Maximum CAPTCHA submissions
+    description: Up to five images are screened locally; this only limits form submissions after a high-confidence answer is rejected. The default is one.
