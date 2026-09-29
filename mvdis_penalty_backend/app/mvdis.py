@@ -181,17 +181,9 @@ class MvdisQuery:
     def query(self, uid: str, birthday: str, max_retries: int) -> QueryResult:
         images = 0
         submissions = 0
-        if best_decision is None or (
-                    decision.agreement,
-                    decision.confidence,
-                ) > (
-                    best_decision.agreement,
-                    best_decision.confidence,
-                ):
-                    best_decision = decision
+        best_decision: OcrDecision | None = None
         with requests.Session() as session:
             session.mount(
-                best_decision: OcrDecision | None = None
                 f"{BASE_URL}/",
                 MvdisTlsAdapter(max_retries=Retry(total=0, raise_on_status=False)),
             )
@@ -211,17 +203,18 @@ class MvdisQuery:
                     timeout=CAPTCHA_TIMEOUT,
                 )
                 captcha.raise_for_status()
-best_summary = ""
-        if best_decision is not None:
-            best_summary = (
-                "; best OCR agreement "
-                f"{best_decision.agreement}/{best_decision.sample_count}, "
-                f"confidence {best_decision.confidence:.3f}"
-            )
-        raise CaptchaError(
-            "CAPTCHA selection failed after "
-            f"{images} image(s) and {submissions} submission(s){best_summary}"
-        )
+                images += 1
+                decision = self._solver.analyze(captcha.content)
+                if best_decision is None or (
+                    decision.agreement,
+                    decision.confidence,
+                ) > (
+                    best_decision.agreement,
+                    best_decision.confidence,
+                ):
+                    best_decision = decision
+                _LOGGER.debug(
+                    "CAPTCHA candidate %s/%s: agreement=%s/%s "
                     "confidence=%.3f reliable=%s",
                     candidate,
                     CAPTCHA_IMAGE_LIMIT,
@@ -265,9 +258,16 @@ best_summary = ""
                     captcha_submissions=submissions,
                 )
 
+        best_summary = ""
+        if best_decision is not None:
+            best_summary = (
+                "; best OCR agreement "
+                f"{best_decision.agreement}/{best_decision.sample_count}, "
+                f"confidence {best_decision.confidence:.3f}"
+            )
         raise CaptchaError(
             "CAPTCHA selection failed after "
-            f"{images} image(s) and {submissions} submission(s)"
+            f"{images} image(s) and {submissions} submission(s){best_summary}"
         )
 
 
