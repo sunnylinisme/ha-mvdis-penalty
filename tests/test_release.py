@@ -19,7 +19,7 @@ def test_addon_metadata_uses_supported_private_defaults() -> None:
     config = yaml.safe_load(
         (ROOT / "mvdis_penalty_backend" / "config.yaml").read_text(encoding="utf-8")
     )
-    assert config["version"] == "0.7.2"
+    assert config["version"] == "0.7.3"
     assert config["options"]["max_retries"] == 1
     assert config["arch"] == ["amd64", "aarch64"]
     assert config["startup"] == "application"
@@ -45,7 +45,7 @@ def test_state_is_private_and_corruption_is_preserved(monkeypatch, tmp_path) -> 
     assert stat.S_IMODE(state_path.stat().st_mode) == 0o600
     assert stat.S_IMODE((tmp_path / "state.corrupt.json").stat().st_mode) == 0o600
     assert addon._state["people"] == {}
-assert config["version"] == "0.7.3"
+
 
 def test_ocr_assets_have_reproducible_timestamps(monkeypatch, tmp_path) -> None:
     wheel = tmp_path / "ddddocr.whl"
