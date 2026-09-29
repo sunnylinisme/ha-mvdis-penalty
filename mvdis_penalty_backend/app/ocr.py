@@ -16,8 +16,12 @@ from typing import Any
 ASSET_DIR = Path(os.environ.get("OCR_ASSET_DIR", "/app/ocr_assets"))
 MODEL_PATH = ASSET_DIR / "common_old.onnx"
 CHARSET_PATH = ASSET_DIR / "charset.json"
-OCR_UNANIMOUS_MIN_CONFIDENCE = 0.90
-OCR_MAJORITY_MIN_CONFIDENCE = 0.95
+# The ddddocr CTC score is conservative on MVDIS images with dense interference
+# lines. Live calibration samples showed unanimous, visually correct readings as
+# low as 0.765. Agreement remains the primary safety signal: 2/4 splits are never
+# submitted, while unanimous and 3/4 decisions use separate calibrated floors.
+OCR_UNANIMOUS_MIN_CONFIDENCE = 0.75
+OCR_MAJORITY_MIN_CONFIDENCE = 0.80
 
 
 @dataclass(frozen=True, slots=True)

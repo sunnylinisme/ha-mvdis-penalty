@@ -292,9 +292,13 @@ def test_ocr_decision_requires_agreement_and_confidence() -> None:
         [("AB12", 0.99), ("AB12", 0.98), ("ABI2", 0.97), ("ABI2", 0.96)]
     )
     uncertain_majority = assess_candidates(
-        [("AB12", 0.94), ("AB12", 0.94), ("AB12", 0.94), ("ABI2", 0.99)]
+        [("AB12", 0.79), ("AB12", 0.79), ("AB12", 0.79), ("ABI2", 0.99)]
     )
-    uncertain_unanimous = assess_candidates([("CD34", 0.89)] * 4)
+    uncertain_unanimous = assess_candidates([("CD34", 0.74)] * 4)
+    calibrated_majority = assess_candidates(
+        [("EF56", 0.80), ("EF56", 0.80), ("EF56", 0.80), ("EFS6", 0.99)]
+    )
+    calibrated_unanimous = assess_candidates([("GH78", 0.75)] * 4)
 
     assert majority.reliable is True
     assert majority.agreement == 3
@@ -303,6 +307,8 @@ def test_ocr_decision_requires_agreement_and_confidence() -> None:
     assert split.reliable is False
     assert uncertain_majority.reliable is False
     assert uncertain_unanimous.reliable is False
+    assert calibrated_majority.reliable is True
+    assert calibrated_unanimous.reliable is True
 
 
 def test_legacy_state_is_migrated_to_primary_profile(monkeypatch, tmp_path) -> None:

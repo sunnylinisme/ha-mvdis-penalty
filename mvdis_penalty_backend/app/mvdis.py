@@ -181,6 +181,7 @@ class MvdisQuery:
     def query(self, uid: str, birthday: str, max_retries: int) -> QueryResult:
         images = 0
         submissions = 0
+        best_decision: OcrDecision | None = None
         with requests.Session() as session:
             session.mount(
                 f"{BASE_URL}/",
@@ -204,6 +205,14 @@ class MvdisQuery:
                 captcha.raise_for_status()
                 images += 1
                 decision = self._solver.analyze(captcha.content)
+                if best_decision is None or (
+                    decision.agreement,
+                    decision.confidence,
+                ) > (
+                    best_decision.agreement,
+                    best_decision.confidence,
+                ):
+                    best_decision = decision
                 _LOGGER.debug(
                     "CAPTCHA candidate %s/%s: agreement=%s/%s "
                     "confidence=%.3f reliable=%s",
@@ -249,9 +258,16 @@ class MvdisQuery:
                     captcha_submissions=submissions,
                 )
 
+        best_summary = ""
+        if best_decision is not None:
+            best_summary = (
+                "; best OCR agreement "
+                f"{best_decision.agreement}/{best_decision.sample_count}, "
+                f"confidence {best_decision.confidence:.3f}"
+            )
         raise CaptchaError(
             "CAPTCHA selection failed after "
-            f"{images} image(s) and {submissions} submission(s)"
+            f"{images} image(s) and {submissions} submission(s){best_summary}"
         )
 
 
