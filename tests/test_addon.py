@@ -263,20 +263,25 @@ def test_ocr_candidate_prefers_valid_length_then_confidence() -> None:
 
 
 def test_ocr_decision_requires_agreement_and_confidence() -> None:
-    reliable = assess_candidates(
+    majority = assess_candidates(
         [("AB12", 0.99), ("AB12", 0.98), ("AB12", 0.97), ("ABI2", 0.99)]
     )
+    unanimous = assess_candidates([("CD34", 0.93)] * 4)
     split = assess_candidates(
         [("AB12", 0.99), ("AB12", 0.98), ("ABI2", 0.97), ("ABI2", 0.96)]
     )
-    uncertain = assess_candidates(
+    uncertain_majority = assess_candidates(
         [("AB12", 0.94), ("AB12", 0.94), ("AB12", 0.94), ("ABI2", 0.99)]
     )
+    uncertain_unanimous = assess_candidates([("CD34", 0.89)] * 4)
 
-    assert reliable.reliable is True
-    assert reliable.agreement == 3
+    assert majority.reliable is True
+    assert majority.agreement == 3
+    assert unanimous.reliable is True
+    assert unanimous.agreement == 4
     assert split.reliable is False
-    assert uncertain.reliable is False
+    assert uncertain_majority.reliable is False
+    assert uncertain_unanimous.reliable is False
 
 
 def test_legacy_state_is_migrated_to_primary_profile(monkeypatch, tmp_path) -> None:
