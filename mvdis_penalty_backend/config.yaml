@@ -1,5 +1,5 @@
 name: 台灣監理站罰單通知
-version: "0.6.1"
+version: "0.6.2"
 slug: mvdis_penalty_backend
 description: 自動查詢監理服務網、在本機辨識驗證碼並通知新罰單
 url: https://github.com/sunnylinisme/ha-mvdis-penalty
