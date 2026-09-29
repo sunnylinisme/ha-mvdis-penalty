@@ -107,10 +107,10 @@ def test_low_confidence_images_are_replaced_without_posting(monkeypatch) -> None
     query = _query_with_session(
         monkeypatch,
         session,
-        *[_decision("ABC", reliable=False, agreement=1) for _ in range(5)],
+        *[_decision("ABC", reliable=False, agreement=1) for _ in range(10)],
     )
 
-    with pytest.raises(CaptchaError, match=r"5 image\(s\) and 0 submission"):
+    with pytest.raises(CaptchaError, match=r"10 image\(s\) and 0 submission"):
         query.query("A123456789", "0780702", max_retries=1)
 
     page_gets = sum(
@@ -120,7 +120,7 @@ def test_low_confidence_images_are_replaced_without_posting(monkeypatch) -> None
         method == "GET" and url == CAPTCHA_URL for method, url, _ in session.calls
     )
     assert page_gets == 1
-    assert captcha_gets == 5
+    assert captcha_gets == 10
     assert sum(method == "POST" for method, _url, _kwargs in session.calls) == 0
 
 
