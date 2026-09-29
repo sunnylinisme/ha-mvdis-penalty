@@ -6,6 +6,7 @@ import hashlib
 import logging
 import re
 import ssl
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -13,7 +14,7 @@ from typing import Any
 import certifi
 import requests
 from bs4 import BeautifulSoup
-from ocr import LocalOcr
+from ocr import LocalOcr, OcrDecision
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -33,6 +34,8 @@ HEADERS = {
 PAGE_TIMEOUT = (8, 20)
 CAPTCHA_TIMEOUT = (8, 20)
 POST_TIMEOUT = (8, 30)
+CAPTCHA_IMAGE_LIMIT = 5
+CAPTCHA_REFRESH_DELAY_SECONDS = 1.0
 
 CAPTCHA_ERRORS = (
     "驗證碼錯誤",
@@ -149,6 +152,8 @@ class Penalty:
 class QueryResult:
     penalties: tuple[Penalty, ...]
     checked_at: datetime
+    captcha_images: int = 1
+    captcha_submissions: int = 1
 
 
 class CaptchaSolver:
@@ -158,45 +163,61 @@ class CaptchaSolver:
         self._ocr: LocalOcr | None = None
 
     def solve(self, image: bytes) -> str:
+        return self.analyze(image).code
+
+    def analyze(self, image: bytes) -> OcrDecision:
         if self._ocr is None:
             _LOGGER.info("Loading local CAPTCHA model")
             self._ocr = LocalOcr()
-        raw = str(self._ocr.classification(image))
-        return re.sub(r"[^A-Z0-9]", "", raw.upper())
+        return self._ocr.analyze(image)
 
 
 class MvdisQuery:
-    """Query MVDIS with a new cookie session for every CAPTCHA attempt."""
+    """Query MVDIS after selecting a reliable CAPTCHA in one cookie session."""
 
     def __init__(self) -> None:
         self._solver = CaptchaSolver()
 
     def query(self, uid: str, birthday: str, max_retries: int) -> QueryResult:
-        for attempt in range(max_retries):
-            with requests.Session() as session:
-                session.mount(
-                    f"{BASE_URL}/",
-                    MvdisTlsAdapter(
-                        max_retries=Retry(total=0, raise_on_status=False)
-                    ),
-                )
-                session.headers.update(HEADERS)
-                page = session.get(QUERY_URL, timeout=PAGE_TIMEOUT)
-                page.raise_for_status()
-                if "captchaImg.jpg" not in page.text or "queryPerson" not in page.text:
-                    raise ParseError("MVDIS query form was not found")
+        images = 0
+        submissions = 0
+        with requests.Session() as session:
+            session.mount(
+                f"{BASE_URL}/",
+                MvdisTlsAdapter(max_retries=Retry(total=0, raise_on_status=False)),
+            )
+            session.headers.update(HEADERS)
+            page = session.get(QUERY_URL, timeout=PAGE_TIMEOUT)
+            page.raise_for_status()
+            if "captchaImg.jpg" not in page.text or "queryPerson" not in page.text:
+                raise ParseError("MVDIS query form was not found")
 
+            for candidate in range(1, CAPTCHA_IMAGE_LIMIT + 1):
+                if candidate > 1:
+                    time.sleep(CAPTCHA_REFRESH_DELAY_SECONDS)
                 captcha = session.get(
                     CAPTCHA_URL,
-                    params={"attempt": attempt},
+                    params={"_": time.time_ns(), "candidate": candidate},
                     headers={"Referer": QUERY_URL},
                     timeout=CAPTCHA_TIMEOUT,
                 )
                 captcha.raise_for_status()
-                code = self._solver.solve(captcha.content)
-                if len(code) != 4:
+                images += 1
+                decision = self._solver.analyze(captcha.content)
+                _LOGGER.debug(
+                    "CAPTCHA candidate %s/%s: agreement=%s/%s "
+                    "confidence=%.3f reliable=%s",
+                    candidate,
+                    CAPTCHA_IMAGE_LIMIT,
+                    decision.agreement,
+                    decision.sample_count,
+                    decision.confidence,
+                    decision.reliable,
+                )
+                if not decision.reliable:
                     continue
 
+                submissions += 1
                 stage = (
                     "natural" if re.fullmatch(r"[A-Z][12]\d{8}", uid) else "foreigner"
                 )
@@ -207,7 +228,7 @@ class MvdisQuery:
                         "method": "queryPerson",
                         "uid": uid.upper(),
                         "birthday": birthday,
-                        "validateStr": code,
+                        "validateStr": decision.code,
                     },
                     headers={"Referer": QUERY_URL},
                     timeout=POST_TIMEOUT,
@@ -215,12 +236,23 @@ class MvdisQuery:
                 response.raise_for_status()
                 compact = _compact_text(response.text)
                 if _has_captcha_error(response.text, compact):
+                    if submissions >= max_retries:
+                        break
                     continue
                 if any(message in compact for message in IDENTITY_ERRORS):
                     raise QueryRejectedError("MVDIS rejected the configured identity")
-                return parse_response(response.text)
+                result = parse_response(response.text)
+                return QueryResult(
+                    result.penalties,
+                    result.checked_at,
+                    captcha_images=images,
+                    captcha_submissions=submissions,
+                )
 
-        raise CaptchaError(f"CAPTCHA failed after {max_retries} attempts")
+        raise CaptchaError(
+            "CAPTCHA selection failed after "
+            f"{images} image(s) and {submissions} submission(s)"
+        )
 
 
 def parse_response(html: str) -> QueryResult:
