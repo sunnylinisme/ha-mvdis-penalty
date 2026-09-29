@@ -605,6 +605,11 @@ def test_public_status_includes_refresh_schedule(monkeypatch, tmp_path) -> None:
     assert 'profileChip(person,index,true)' in DASHBOARD_HTML
     assert 'card.scrollIntoView({behavior:"smooth"' in DASHBOARD_HTML
     assert 'summaryCard(' not in DASHBOARD_HTML
+    assert '.overview-empty.clear' in DASHBOARD_HTML
+    assert (
+        'overviewGroup("需要注意",attention,"目前無需注意","clear")'
+        in DASHBOARD_HTML
+    )
     assert 'id="search"' in DASHBOARD_HTML
     assert 'id="status-filter"' in DASHBOARD_HTML
     assert 'class="people-grid"' in DASHBOARD_HTML

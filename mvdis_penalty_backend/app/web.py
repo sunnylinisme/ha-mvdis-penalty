@@ -188,7 +188,12 @@ DASHBOARD_HTML = """<!doctype html>
       background:var(--surface-2);color:var(--text);font-size:13px;box-shadow:none}
     button.profile-chip:hover{border-color:var(--accent);color:var(--accent);filter:none}
     button.profile-chip.attention{border-color:var(--bad);background:var(--bad-soft);color:var(--bad)}
-    .profile-chip.empty{padding:7px 0;color:var(--muted);font-size:13px}
+    .overview-empty{display:flex;align-items:center;gap:8px;width:100%;padding:9px 11px;
+      border:1px solid var(--line);border-radius:12px;background:var(--surface-2);color:var(--muted);
+      font-size:13px;font-weight:700}.overview-empty:before{content:"\\2713";display:grid;width:20px;height:20px;
+      place-items:center;border-radius:50%;background:var(--line);color:var(--surface);font-size:12px}
+    .overview-empty.clear{border-color:var(--ok);background:var(--ok-soft);color:var(--ok)}
+    .overview-empty.clear:before{background:var(--ok);color:var(--surface)}
     .schedule{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;overflow:hidden;
       margin-bottom:18px;border:1px solid var(--line);border-radius:16px;background:var(--line)}
     .schedule-item{padding:13px 16px;background:var(--surface)} .schedule-item span{display:block;
@@ -286,13 +291,13 @@ function jumpToPerson(index){if(!latestData)return;document.querySelector("#sear
   setTimeout(()=>card.classList.remove("highlight"),1600)})}
 function profileChip(person,index,attention=false){const chip=el("button",person.name,"profile-chip"+(attention?" attention":""));
  chip.type="button";chip.addEventListener("click",()=>jumpToPerson(index));return chip}
-function overviewGroup(label,chips,emptyText){const group=el("div",undefined,"overview-group"),list=el("div",undefined,"profile-chips");
+function overviewGroup(label,chips,emptyText,emptyKind="neutral"){const group=el("div",undefined,"overview-group"),list=el("div",undefined,"profile-chips");
  group.append(el("span",label,"overview-label"));if(chips.length)list.append(...chips);
- else list.append(el("span",emptyText,"profile-chip empty"));group.append(list);return group}
+ else list.append(el("span",emptyText,"overview-empty "+emptyKind));group.append(list);return group}
 function renderOverview(data){const root=document.querySelector("#overview"),people=data.people||[];
  const all=people.map((person,index)=>profileChip(person,index));const attention=people.flatMap((person,index)=>
   person.error?[profileChip(person,index,true)]:[]);root.replaceChildren(overviewGroup("查詢人",all,"尚未設定"),
-  overviewGroup("需要注意",attention,"目前無"))}
+  overviewGroup("需要注意",attention,"目前無需注意","clear"))}
 function renderSchedule(data){document.querySelector("#last-refresh").textContent=time(data.last_refresh_at);
  document.querySelector("#next-refresh").textContent=data.next_refresh_at?time(data.next_refresh_at):"尚未排程";
  const guard=data.cooldown_until?"冷卻至 "+time(data.cooldown_until):data.captcha_retry_at?
