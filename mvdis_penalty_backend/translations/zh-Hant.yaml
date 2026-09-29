@@ -10,7 +10,7 @@ configuration:
     description: 七碼民國年月日，例如民國 78 年 7 月 2 日填 0780702。
   additional_people:
     name: 其他查詢人
-    description: 可加入最多 4 位已授權查詢的人員；每人都會有獨立實體與通知。
+    description: 可加入最多 9 位已授權查詢的人員；連同主要查詢人共最多 10 人，每人都有獨立實體與通知。
     fields:
       name:
         name: 名稱
@@ -27,4 +27,3 @@ configuration:
   max_retries:
     name: 驗證碼最多正式提交次數
     description: 每輪會先自動查看最多 10 張圖片；這裡只限制高信心答案被網站拒絕後可再次正式提交的次數，預設 1 次。
-

@@ -10,7 +10,7 @@ configuration:
     description: Seven digits, for example 0780702 for ROC year 78, July 2.
   additional_people:
     name: Additional people
-    description: Add up to four authorized people; each receives separate entities and notifications.
+    description: Add up to nine authorized people, for ten profiles in total; each receives separate entities and notifications.
     fields:
       name:
         name: Name
@@ -27,4 +27,3 @@ configuration:
   max_retries:
     name: Maximum CAPTCHA submissions
     description: Up to ten images are screened locally; this only limits form submissions after a high-confidence answer is rejected. The default is one.
-

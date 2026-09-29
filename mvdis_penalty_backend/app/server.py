@@ -36,7 +36,7 @@ DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 OPTIONS_PATH = DATA_DIR / "options.json"
 STATE_PATH = DATA_DIR / "state.json"
 HA_API = "http://supervisor/core/api"
-MAX_PEOPLE = 5
+MAX_PEOPLE = 10
 MAX_SEEN_KEYS = 1000
 OPTIONS_POLL_SECONDS = 5.0
 OUTAGE_COOLDOWN = timedelta(minutes=30)
