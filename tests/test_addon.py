@@ -187,14 +187,14 @@ def test_parse_options_defaults_to_one_captcha_attempt() -> None:
     assert options["max_retries"] == 1
 
 
-def test_parse_options_supports_five_people_and_rejects_duplicates() -> None:
+def test_parse_options_supports_ten_people_and_rejects_duplicates() -> None:
     people = [
         {
             "name": f"家人 {index}",
             "uid": _national_id(letter),
             "birthday": "0800101",
         }
-        for index, letter in enumerate("BCDE", start=1)
+        for index, letter in enumerate("BCDEFGHJK", start=1)
     ]
     options = parse_options(
         {
@@ -204,8 +204,29 @@ def test_parse_options_supports_five_people_and_rejects_duplicates() -> None:
         },
         key_salt=KEY_SALT,
     )
-    assert len(options["people"]) == 5
-    assert len({person.key for person in options["people"]}) == 5
+    assert len(options["people"]) == 10
+    assert len({person.key for person in options["people"]}) == 10
+
+    try:
+        parse_options(
+            {
+                "uid": "A123456789",
+                "birthday": "0780702",
+                "additional_people": people
+                + [
+                    {
+                        "name": "第 11 人",
+                        "uid": _national_id("L"),
+                        "birthday": "0800101",
+                    }
+                ],
+            },
+            key_salt=KEY_SALT,
+        )
+    except ValueError as err:
+        assert "最多只能設定 10 位" in str(err)
+    else:
+        raise AssertionError("an eleventh person was accepted")
 
     try:
         parse_options(
@@ -578,6 +599,11 @@ def test_public_status_includes_refresh_schedule(monkeypatch, tmp_path) -> None:
     assert "監理服務網目前無法連線" in DASHBOARD_HTML
     assert "可再次立即查詢：" in DASHBOARD_HTML
     assert "驗證碼判讀未達可靠門檻" in DASHBOARD_HTML
+    assert 'aria-label="多人總覽"' in DASHBOARD_HTML
+    assert 'id="search"' in DASHBOARD_HTML
+    assert 'id="status-filter"' in DASHBOARD_HTML
+    assert 'class="people-grid"' in DASHBOARD_HTML
+    assert 'document.createElement("details")' in DASHBOARD_HTML
 
 
 def test_recent_identical_startup_does_not_query_again(monkeypatch, tmp_path) -> None:
