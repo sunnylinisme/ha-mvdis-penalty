@@ -41,6 +41,7 @@ MAX_SEEN_KEYS = 1000
 OPTIONS_POLL_SECONDS = 5.0
 OUTAGE_COOLDOWN = timedelta(minutes=30)
 MANUAL_QUERY_GUARD = timedelta(minutes=5)
+CAPTCHA_FAST_RETRY_DELAY = timedelta(seconds=5)
 CAPTCHA_RETRY_DELAY = timedelta(minutes=15)
 PROFILE_QUERY_DELAY_SECONDS = 2.0
 OUTAGE_ERROR_TYPES = frozenset({"timeout", "network", "http"})
@@ -666,8 +667,13 @@ class Addon:
                 state["error_type"] = error_type
                 state["failed_at"] = failed_at
                 if error_type == "captcha":
+                    retry_delay = (
+                        CAPTCHA_FAST_RETRY_DELAY
+                        if profile_keys is None
+                        else CAPTCHA_RETRY_DELAY
+                    )
                     state["captcha_retry_at"] = (
-                        datetime.now(UTC) + CAPTCHA_RETRY_DELAY
+                        datetime.now(UTC) + retry_delay
                     ).isoformat()
                 else:
                     state.pop("captcha_retry_at", None)
@@ -846,7 +852,7 @@ class Addon:
                 due_keys = self._due_captcha_retry_keys(datetime.now(UTC))
                 if due_keys:
                     _LOGGER.info(
-                        "Retrying %s profile(s) after uncertain CAPTCHA recognition",
+                        "Retrying %s profile(s) after CAPTCHA failure",
                         len(due_keys),
                     )
                     self.refresh(profile_keys=due_keys)
