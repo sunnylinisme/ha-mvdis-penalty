@@ -783,10 +783,23 @@ def test_captcha_failure_schedules_only_failed_profile_for_retry(
     assert secondary.get("captcha_retry_at") is None
     assert status["captcha_retry_at"] == primary["captcha_retry_at"]
     retry_at = server.datetime.fromisoformat(primary["captcha_retry_at"])
+    retry_delay = retry_at - server.datetime.now(server.UTC)
+    assert server.timedelta(0) <= retry_delay <= server.CAPTCHA_FAST_RETRY_DELAY
     assert addon._due_captcha_retry_keys(retry_at) == {"primary"}
 
     attempts.clear()
     full_anchor = addon._last_full_refresh_at
+    addon.refresh(profile_keys={"primary"})
+
+    assert attempts == [first_uid]
+    delayed_retry_at = server.datetime.fromisoformat(
+        addon.public_status()["captcha_retry_at"]
+    )
+    delayed_retry = delayed_retry_at - server.datetime.now(server.UTC)
+    assert server.CAPTCHA_FAST_RETRY_DELAY < delayed_retry
+    assert delayed_retry <= server.CAPTCHA_RETRY_DELAY
+
+    attempts.clear()
     monkeypatch.setattr(
         addon._query,
         "query",
