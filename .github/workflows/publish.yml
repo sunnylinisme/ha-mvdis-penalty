@@ -114,3 +114,56 @@ jobs:
             ${{ needs.prepare.outputs.version }}
             latest
           registry-prefix: ${{ needs.prepare.outputs.registry_prefix }}
+
+  release:
+    name: Publish GitHub release
+    needs:
+      - prepare
+      - manifest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Prepare Traditional Chinese release notes
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          changelog = Path("mvdis_penalty_backend/CHANGELOG.md").read_text(
+              encoding="utf-8"
+          )
+          match = re.search(
+              rf"(?ms)^## {re.escape(version)}\s*\n(.*?)(?=^## |\Z)",
+              changelog,
+          )
+          if not match or not match.group(1).strip():
+              raise SystemExit(f"找不到 {version} 的更新紀錄")
+          Path("release-notes.md").write_text(
+              "## 更新內容\n\n" + match.group(1).strip() + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Create release when the version is new
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v${VERSION}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "$tag already exists; skipping"
+            exit 0
+          fi
+          gh release create "$tag" \
+            --target "$GITHUB_SHA" \
+            --title "$tag" \
+            --notes-file release-notes.md
