@@ -551,6 +551,102 @@ def test_restore_profile_recreates_entities_without_notifications(monkeypatch) -
     assert not any("persistent_notification/create" in url for url in urls)
 
 
+def test_entity_probe_uses_one_local_group_request_per_profile(monkeypatch) -> None:
+    calls: list[str] = []
+    statuses = iter((404, 200))
+
+    class Response:
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+
+        def raise_for_status(self) -> None:
+            return None
+
+    def fake_get(url, **kwargs):
+        calls.append(url)
+        return Response(next(statuses))
+
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
+    monkeypatch.setattr(server.requests, "get", fake_get)
+    publisher = server.HomeAssistantPublisher()
+    person = Person("primary", "本人", "A123456789", "0780702", primary=True)
+
+    assert publisher.profile_is_published(person) is False
+    assert publisher.profile_is_published(person) is True
+    assert calls == [
+        f"{server.HA_API}/states/group.mvdis_penalty",
+        f"{server.HA_API}/states/group.mvdis_penalty",
+    ]
+
+
+def test_entity_sync_restores_cache_without_querying_mvdis(
+    monkeypatch, tmp_path
+) -> None:
+    options_path = tmp_path / "options.json"
+    options_path.write_text(
+        json.dumps(
+            {
+                "primary_name": "本人",
+                "uid": "A123456789",
+                "birthday": "0780702",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(server, "STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(server, "OPTIONS_PATH", options_path)
+    addon = server.Addon()
+    addon._state["people"]["primary"] = {
+        "checked_at": "2026-09-28T12:00:00+00:00",
+        "penalties": [_item("cached", 900)],
+    }
+    presence = iter((False, True))
+    restored: list[tuple[Person, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        addon._publisher,
+        "profile_is_published",
+        lambda person: next(presence),
+    )
+    monkeypatch.setattr(
+        addon._publisher,
+        "restore_profile",
+        lambda person, state: restored.append((person, state)),
+    )
+    monkeypatch.setattr(
+        addon._query,
+        "query",
+        lambda *args: (_ for _ in ()).throw(AssertionError("MVDIS was queried")),
+    )
+
+    assert addon._sync_entities_once() is True
+    assert len(restored) == 1
+    assert restored[0][0].name == "本人"
+    assert restored[0][1]["penalties"] == [_item("cached", 900)]
+
+
+def test_entity_sync_loop_retries_quickly_until_success(monkeypatch) -> None:
+    addon = object.__new__(server.Addon)
+    addon._stop = threading.Event()
+    attempts: list[bool] = []
+
+    def sync_once() -> bool:
+        success = bool(attempts)
+        attempts.append(success)
+        if success:
+            addon.stop()
+        return success
+
+    monkeypatch.setattr(server, "ENTITY_SYNC_CHECK_SECONDS", 0.001)
+    monkeypatch.setattr(server, "ENTITY_SYNC_RETRY_SECONDS", 0.001)
+    monkeypatch.setattr(addon, "_sync_entities_once", sync_once)
+    addon._schedule_wake = threading.Event()
+
+    addon._entity_sync_loop()
+
+    assert attempts == [False, True]
+
+
 def test_public_status_does_not_expose_identity(monkeypatch, tmp_path) -> None:
     options_path = tmp_path / "options.json"
     options_path.write_text(

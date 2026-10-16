@@ -39,6 +39,8 @@ HA_API = "http://supervisor/core/api"
 MAX_PEOPLE = 10
 MAX_SEEN_KEYS = 1000
 OPTIONS_POLL_SECONDS = 5.0
+ENTITY_SYNC_CHECK_SECONDS = 15.0
+ENTITY_SYNC_RETRY_SECONDS = 5.0
 OUTAGE_COOLDOWN = timedelta(minutes=30)
 MANUAL_QUERY_GUARD = timedelta(minutes=5)
 CAPTCHA_FAST_RETRY_DELAY = timedelta(seconds=5)
@@ -230,6 +232,57 @@ class HomeAssistantPublisher:
     def __init__(self) -> None:
         self._token = os.environ.get("SUPERVISOR_TOKEN", "")
         self._warned_missing_token = False
+        self._probe_failed = False
+
+    @staticmethod
+    def profile_entity_ids(person: Person) -> tuple[str, ...]:
+        """Return every state entity that should exist for one profile."""
+        stem = person.entity_stem
+        return (
+            f"sensor.{stem}_unpaid_count",
+            f"sensor.{stem}_total_amount",
+            f"binary_sensor.{stem}_has_unpaid",
+            f"sensor.{stem}_last_check",
+            f"sensor.{stem}_status",
+            f"group.{stem}",
+        )
+
+    def profile_is_published(self, person: Person) -> bool | None:
+        """Return entity presence, or None while the Home Assistant API is down."""
+        if not self._token:
+            if not self._warned_missing_token:
+                _LOGGER.warning(
+                    "SUPERVISOR_TOKEN is unavailable; "
+                    "Home Assistant updates are disabled"
+                )
+                self._warned_missing_token = True
+            return None
+        try:
+            response = requests.get(
+                f"{HA_API}/states/group.{person.entity_stem}",
+                headers={"Authorization": f"Bearer {self._token}"},
+                timeout=5,
+            )
+            if response.status_code == 404:
+                self._mark_probe_available()
+                return False
+            response.raise_for_status()
+            self._mark_probe_available()
+            return True
+        except requests.RequestException as err:
+            if not self._probe_failed:
+                _LOGGER.warning(
+                    "Home Assistant API is unavailable; "
+                    "entity sync will retry: %s",
+                    err,
+                )
+            self._probe_failed = True
+            return None
+
+    def _mark_probe_available(self) -> None:
+        if self._probe_failed:
+            _LOGGER.info("Home Assistant API is available again")
+        self._probe_failed = False
 
     def publish_result(
         self,
@@ -414,13 +467,9 @@ class HomeAssistantPublisher:
             if profile_key == "primary"
             else f"mvdis_penalty_{profile_key}"
         )
-        for entity_id in (
-            f"sensor.{stem}_unpaid_count",
-            f"sensor.{stem}_total_amount",
-            f"binary_sensor.{stem}_has_unpaid",
-            f"sensor.{stem}_last_check",
-            f"sensor.{stem}_status",
-        ):
+        for entity_id in self.profile_entity_ids(
+            Person(profile_key, "", "", "", primary=profile_key == "primary")
+        )[:-1]:
             self._delete(f"/states/{entity_id}")
         self._post("/services/group/remove", {"object_id": stem})
 
@@ -513,6 +562,44 @@ class Addon:
     def stop(self) -> None:
         self._stop.set()
         self._schedule_wake.set()
+
+    def _sync_entities_once(self) -> bool:
+        """Restore cached entities removed by a Home Assistant Core restart."""
+        try:
+            people = self._load_options()["people"]
+        except Exception:
+            return False
+        with self._state_lock:
+            people_state = json.loads(json.dumps(self._state.get("people", {})))
+        synced = True
+        for person in people:
+            published = self._publisher.profile_is_published(person)
+            if published is None:
+                return False
+            if published:
+                continue
+            self._publisher.restore_profile(
+                person,
+                people_state.get(person.key, _empty_person_state()),
+            )
+            if self._publisher.profile_is_published(person) is True:
+                _LOGGER.info(
+                    "Restored Home Assistant entities for profile %s",
+                    person.name,
+                )
+            else:
+                synced = False
+        return synced
+
+    def _entity_sync_loop(self) -> None:
+        """Continuously detect Core restarts without querying MVDIS."""
+        delay = ENTITY_SYNC_RETRY_SECONDS
+        while not self._stop.wait(delay):
+            delay = (
+                ENTITY_SYNC_CHECK_SECONDS
+                if self._sync_entities_once()
+                else ENTITY_SYNC_RETRY_SECONDS
+            )
 
     def refresh(
         self,
@@ -792,6 +879,11 @@ class Addon:
         }
 
     def run(self) -> None:
+        threading.Thread(
+            target=self._entity_sync_loop,
+            name="home-assistant-entity-sync",
+            daemon=True,
+        ).start()
         self.refresh(startup=True)
         options_fingerprint = self._options_fingerprint()
         while not self._stop.is_set():
