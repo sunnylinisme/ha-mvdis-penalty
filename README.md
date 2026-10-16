@@ -40,6 +40,8 @@ Add-on 使用 GitHub 預先建置的映像檔；Home Assistant 只需下載完�
 
 每位查詢人另有一個可搜尋的群組實體，主要查詢人為 `group.mvdis_penalty`，其他查詢人的群組 ID 會包含相同的本機識別碼。點開群組即可集中查看該人的 5 個實體。由 Add-on 直接建立的實體在「裝置與服務」頁仍可能列於「未分組」，這是 Home Assistant REST 狀態實體的限制，不影響群組、查詢或通知。
 
+Home Assistant Core 重啟時會先清空這類動態狀態；Add-on 會每 15 秒確認實體是否存在，若 API 暫時未就緒則每 5 秒重試，並直接從本機快取補回實體與群組。這項同步不會連線監理服務網，也不會增加驗證碼查詢。
+
 ## 內建查詢頁面
 
 Add-on 使用 Home Assistant Ingress 提供管理頁面，不對區域網路開放連接埠，並由 Home Assistant 處理登入驗證。頁面提供：
