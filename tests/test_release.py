@@ -92,3 +92,14 @@ def test_publish_workflow_does_not_follow_a_moving_helper_branch() -> None:
         encoding="utf-8"
     )
     assert "home-assistant/actions/helpers/info@master" not in workflow
+
+
+def test_publish_workflow_releases_only_after_multi_arch_image() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "publish.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Prepare Traditional Chinese release notes" in workflow
+    assert "gh release create" in workflow
+    assert "- manifest" in workflow
+    assert "contents: write" in workflow
